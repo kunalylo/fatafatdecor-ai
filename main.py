@@ -89,8 +89,7 @@ async def generate_decoration(req: GenerateRequest):
             raise HTTPException(status_code=500, detail="No image returned from AI")
 
         else:
-            # TEXT-TO-IMAGE — no room photo, generate a full decorated room scene
-            # Uses client.images.generate() instead of emergentintegrations package
+            # TEXT-TO-IMAGE — generate a full decorated room scene
             response = client.images.generate(
                 model="gpt-image-1",
                 prompt=req.prompt,
