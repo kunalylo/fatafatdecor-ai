@@ -96,13 +96,14 @@ async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
     )
     result = await asyncio.to_thread(
         fal_client.run,
-        "fal-ai/flux-pro/v1/kontext",
+        "fal-ai/flux-pro/kontext",
         arguments={
             "prompt": prompt,
             "image_url": fal_image_url,
             "guidance_scale": 3.5,
             "num_inference_steps": 28,
             "output_format": "jpeg",
+            "safety_tolerance": "2",
         },
     )
     return result["images"][0]["url"]
