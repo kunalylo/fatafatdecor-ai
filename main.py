@@ -102,9 +102,7 @@ async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
             "image_url": fal_image_url,
             "guidance_scale": 3.5,
             "num_inference_steps": 28,
-            "num_images": 1,
             "output_format": "jpeg",
-            "safety_tolerance": "2",
         },
     )
     return result["images"][0]["url"]
