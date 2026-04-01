@@ -82,28 +82,28 @@ def parse_json_safe(text: str) -> dict:
 
 
 async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
-    """Upload room photo to fal storage → run FLUX Kontext (image editing model) → return image URL.
-    Uses flux-pro/v1/kontext — designed to edit photos based on text instructions,
-    keeping the room intact while prominently adding requested decorations.
+    """Upload room photo to fal storage → FLUX Dev img2img at high strength → return image URL.
+    strength=0.82 — keeps room layout recognizable but rewrites enough to fill it with decorations.
+    guidance_scale=8.0 — strictly follows the per-item prompt list.
     """
     img_data = image_base64
     if ',' in img_data:
         img_data = img_data.split(',', 1)[1]
     image_bytes = base64.b64decode(img_data)
-    # fal_client.upload expects raw bytes, NOT a BytesIO object
     fal_image_url = await asyncio.to_thread(
         fal_client.upload, image_bytes, content_type="image/png"
     )
     result = await asyncio.to_thread(
         fal_client.run,
-        "fal-ai/flux-pro/kontext/max",
+        "fal-ai/flux/dev/image-to-image",
         arguments={
             "prompt": prompt,
             "image_url": fal_image_url,
-            "guidance_scale": 7.5,
-            "num_inference_steps": 28,
+            "strength": 0.82,
+            "num_inference_steps": 35,
+            "guidance_scale": 8.0,
+            "num_images": 1,
             "output_format": "jpeg",
-            "safety_tolerance": "2",
         },
     )
     return result["images"][0]["url"]
@@ -253,22 +253,23 @@ def _build_decoration_prompt(
 
     if has_image:
         return (
-            f"Transform this {room_type} into a spectacular professional {occasion} celebration venue. "
-            f"Keep the room structure, furniture, walls and background EXACTLY as-is — "
-            f"only ADD decorations on top of the existing space. "
-            f"Every single decoration below MUST be clearly visible and prominently placed:\n"
+            f"A {room_type} decorated extravagantly for a {occasion} party. "
+            f"The room is COMPLETELY FILLED with professional event decorations — "
+            f"walls covered floor-to-ceiling, ceiling draped, every corner bursting with colour. "
+            f"ALL of these specific items are PROMINENTLY visible in the scene:\n"
             f"{decoration_lines}\n"
-            f"The decorations must FILL the entire space — walls, ceiling, corners, every surface. "
-            f"The result should look like a high-end professional {occasion} party setup in this exact room. "
-            f"Photorealistic, warm celebratory lighting, vibrant colours.{special} "
+            f"The room feels like a high-end professional {occasion} event venue. "
+            f"Every wall surface is covered. Balloons cluster in the hundreds. "
+            f"The backdrop fills the main wall completely. "
+            f"Photorealistic event photography, warm vibrant lighting, rich saturated colours.{special} "
             f"{NO_TEXT}"
         )
     else:
         return (
             f"Professional photorealistic {room_type} completely transformed into a {occasion} celebration venue. "
-            f"Every decoration listed below MUST be prominently visible:\n"
+            f"Every decoration listed below is prominently visible and fills the entire space:\n"
             f"{decoration_lines}\n"
-            f"Walls and ceiling completely covered with decorations, vibrant festive atmosphere, "
+            f"Walls and ceiling completely covered, vibrant festive atmosphere, "
             f"professional event photography quality, warm ambient lighting, 4K.{special} "
             f"{NO_TEXT}"
         )
