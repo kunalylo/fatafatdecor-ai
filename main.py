@@ -90,10 +90,9 @@ async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
     if ',' in img_data:
         img_data = img_data.split(',', 1)[1]
     image_bytes = base64.b64decode(img_data)
-    image_file = io.BytesIO(image_bytes)
-    image_file.name = "room.png"
+    # fal_client.upload expects raw bytes, NOT a BytesIO object
     fal_image_url = await asyncio.to_thread(
-        fal_client.upload, image_file, content_type="image/png"
+        fal_client.upload, image_bytes, content_type="image/png"
     )
     result = await asyncio.to_thread(
         fal_client.run,
@@ -106,7 +105,6 @@ async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
             "guidance_scale": 3.5,
             "num_images": 1,
             "output_format": "jpeg",
-            "enable_safety_checker": False,
         },
     )
     return result["images"][0]["url"]
@@ -386,10 +384,9 @@ async def analyze_decoration(req: AnalyzeRequest):
         if ',' in img_data:
             img_data = img_data.split(',', 1)[1]
         image_bytes = base64.b64decode(img_data)
-        image_file = io.BytesIO(image_bytes)
-        image_file.name = "decoration.jpg"
+        # fal_client.upload expects raw bytes
         image_url = await asyncio.to_thread(
-            fal_client.upload, image_file, content_type="image/jpeg"
+            fal_client.upload, image_bytes, content_type="image/jpeg"
         )
 
         system_prompt = """You are an expert event decoration analyst for FatafatDecor India. Count ALL items accurately.
