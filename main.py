@@ -84,7 +84,8 @@ def parse_json_safe(text: str) -> dict:
 async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
     """Upload room photo to fal storage → run FLUX Dev img2img → return image URL.
     Uses image-to-image (no mask needed) — preserves room structure, adds decorations.
-    strength=0.70 keeps 30% of original structure while allowing full decoration changes.
+    strength=0.85 gives strong decoration changes while keeping room layout recognizable.
+    guidance_scale=7.5 ensures the model closely follows the decoration prompt.
     """
     img_data = image_base64
     if ',' in img_data:
@@ -100,9 +101,9 @@ async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
         arguments={
             "prompt": prompt,
             "image_url": fal_image_url,
-            "strength": 0.70,
-            "num_inference_steps": 28,
-            "guidance_scale": 3.5,
+            "strength": 0.85,
+            "num_inference_steps": 30,
+            "guidance_scale": 7.5,
             "num_images": 1,
             "output_format": "jpeg",
         },
@@ -205,13 +206,16 @@ async def smart_generate(req: SmartGenerateRequest):
     )
 
     image_context = (
-        "The customer has uploaded their room photo. The FLUX prompt must instruct "
-        "the AI to keep ALL existing furniture, walls and structure unchanged and "
-        "ONLY ADD decorations on top."
+        "The customer has uploaded their room photo. Write the FLUX prompt to HEAVILY "
+        "DECORATE this room — balloons, banners, streamers, lights, flowers, props "
+        "should be VERY PROMINENTLY VISIBLE throughout the room. The room layout and "
+        "furniture silhouettes should remain recognizable but the decoration must be "
+        "bold, vibrant and fill the entire frame. Use vivid colors. Describe every "
+        "decoration item explicitly and say it should be prominently placed in the room."
         if has_user_image
         else (
             "No room photo uploaded. The FLUX prompt should describe a full "
-            "photorealistic decorated room from scratch."
+            "photorealistic decorated room from scratch with bold, vibrant decorations."
         )
     )
 
@@ -317,14 +321,17 @@ Respond ONLY with this exact JSON structure:
         item_desc = ", ".join(item_names) or f"{req.occasion} decorations"
         if has_user_image:
             flux_prompt = (
-                f"Decorate this exact {req.room_type} for a {req.occasion} celebration. "
-                f"Keep all existing furniture and walls unchanged. Add only: {item_desc}. "
-                f"{NO_TEXT} Photorealistic, warm ambient lighting."
+                f"This {req.room_type} is HEAVILY DECORATED for a {req.occasion} celebration. "
+                f"The room is FILLED with vibrant, prominent decorations: {item_desc}. "
+                f"Balloons cover the walls and ceiling. Colorful streamers hang everywhere. "
+                f"The entire room is transformed with bold festive decor, very visible and eye-catching. "
+                f"Photorealistic, warm ambient lighting, high quality. {NO_TEXT}"
             )
         else:
             flux_prompt = (
-                f"Professional photorealistic {req.room_type} decorated for {req.occasion}. "
-                f"Show: {item_desc}. "
+                f"Professional photorealistic {req.room_type} completely decorated for {req.occasion}. "
+                f"Filled with vibrant decorations: {item_desc}. "
+                f"Bold colors, festive atmosphere, decorations covering walls and ceiling. "
                 f"{NO_TEXT} High quality event decoration photography, warm lighting, 4K."
             )
 
