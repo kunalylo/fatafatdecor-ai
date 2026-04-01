@@ -82,10 +82,9 @@ def parse_json_safe(text: str) -> dict:
 
 
 async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
-    """Upload room photo to fal storage → run FLUX Dev img2img → return image URL.
-    Uses image-to-image (no mask needed) — preserves room structure, adds decorations.
-    strength=0.85 gives strong decoration changes while keeping room layout recognizable.
-    guidance_scale=7.5 ensures the model closely follows the decoration prompt.
+    """Upload room photo to fal storage → run FLUX Kontext (image editing model) → return image URL.
+    Uses flux-pro/v1/kontext — designed to edit photos based on text instructions,
+    keeping the room intact while prominently adding requested decorations.
     """
     img_data = image_base64
     if ',' in img_data:
@@ -97,15 +96,15 @@ async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
     )
     result = await asyncio.to_thread(
         fal_client.run,
-        "fal-ai/flux/dev/image-to-image",
+        "fal-ai/flux-pro/v1/kontext",
         arguments={
             "prompt": prompt,
             "image_url": fal_image_url,
-            "strength": 0.85,
-            "num_inference_steps": 30,
-            "guidance_scale": 7.5,
+            "guidance_scale": 3.5,
+            "num_inference_steps": 28,
             "num_images": 1,
             "output_format": "jpeg",
+            "safety_tolerance": "2",
         },
     )
     return result["images"][0]["url"]
@@ -206,16 +205,19 @@ async def smart_generate(req: SmartGenerateRequest):
     )
 
     image_context = (
-        "The customer has uploaded their room photo. Write the FLUX prompt to HEAVILY "
-        "DECORATE this room — balloons, banners, streamers, lights, flowers, props "
-        "should be VERY PROMINENTLY VISIBLE throughout the room. The room layout and "
-        "furniture silhouettes should remain recognizable but the decoration must be "
-        "bold, vibrant and fill the entire frame. Use vivid colors. Describe every "
-        "decoration item explicitly and say it should be prominently placed in the room."
+        "The customer has uploaded their room photo. You MUST write the flux_prompt as "
+        "EDITING INSTRUCTIONS (not a description) because we use an image-editing model. "
+        "Start with 'Add' or 'Decorate'. For example: "
+        "'Add colorful birthday balloons covering the walls and ceiling, hang vibrant "
+        "streamers from the ceiling, place a large balloon arch in the background, add "
+        "a Happy Birthday banner, scatter confetti on the floor, add fairy lights.' "
+        "Be VERY SPECIFIC about EVERY decoration item selected and where to place it. "
+        "The decorations must be BOLD, VIBRANT, and COMPLETELY FILL the room."
         if has_user_image
         else (
-            "No room photo uploaded. The FLUX prompt should describe a full "
-            "photorealistic decorated room from scratch with bold, vibrant decorations."
+            "No room photo uploaded. The flux_prompt should describe a full "
+            "photorealistic decorated room from scratch. Be very vivid and specific "
+            "about every decoration item, color, placement, and festive atmosphere."
         )
     )
 
@@ -240,7 +242,7 @@ Rules:
 2. selected_item_ids must be exact ids from AVAILABLE ITEMS above only
 3. selected_rent_ids must be exact ids from RENT ITEMS above only (max 2)
 4. Total cost = kit selling_total + sum of selected item prices + sum of selected rent prices — must be <= {req.budget_max}
-5. flux_prompt: vivid, photorealistic, describes colors/arrangement/mood, NO brand names, NO text in image, includes "{NO_TEXT}"
+5. flux_prompt: EDITING INSTRUCTIONS starting with "Add" or "Decorate" — list every selected decoration item with color/placement, make decorations bold and room-filling, NO brand names, NO text in image, ends with "{NO_TEXT}"
 
 Respond ONLY with this exact JSON structure:
 {{
@@ -321,17 +323,17 @@ Respond ONLY with this exact JSON structure:
         item_desc = ", ".join(item_names) or f"{req.occasion} decorations"
         if has_user_image:
             flux_prompt = (
-                f"This {req.room_type} is HEAVILY DECORATED for a {req.occasion} celebration. "
-                f"The room is FILLED with vibrant, prominent decorations: {item_desc}. "
-                f"Balloons cover the walls and ceiling. Colorful streamers hang everywhere. "
-                f"The entire room is transformed with bold festive decor, very visible and eye-catching. "
-                f"Photorealistic, warm ambient lighting, high quality. {NO_TEXT}"
+                f"Add {req.occasion} decorations to this {req.room_type}: "
+                f"place {item_desc} prominently throughout the room. "
+                f"Cover the walls and ceiling with colorful balloons and streamers. "
+                f"Add a large festive backdrop. Make the decorations bold, vibrant and completely fill the room. "
+                f"{NO_TEXT}"
             )
         else:
             flux_prompt = (
                 f"Professional photorealistic {req.room_type} completely decorated for {req.occasion}. "
-                f"Filled with vibrant decorations: {item_desc}. "
-                f"Bold colors, festive atmosphere, decorations covering walls and ceiling. "
+                f"Show prominently: {item_desc}. "
+                f"Bold vibrant colors, balloons covering walls, streamers, festive atmosphere. "
                 f"{NO_TEXT} High quality event decoration photography, warm lighting, 4K."
             )
 
