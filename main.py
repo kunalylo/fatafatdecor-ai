@@ -96,11 +96,11 @@ async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
     )
     result = await asyncio.to_thread(
         fal_client.run,
-        "fal-ai/flux-pro/kontext",
+        "fal-ai/flux-pro/kontext/max",
         arguments={
             "prompt": prompt,
             "image_url": fal_image_url,
-            "guidance_scale": 3.5,
+            "guidance_scale": 7.5,
             "num_inference_steps": 28,
             "output_format": "jpeg",
             "safety_tolerance": "2",
@@ -204,19 +204,24 @@ async def smart_generate(req: SmartGenerateRequest):
     )
 
     image_context = (
-        "The customer has uploaded their room photo. You MUST write the flux_prompt as "
-        "EDITING INSTRUCTIONS (not a description) because we use an image-editing model. "
-        "Start with 'Add' or 'Decorate'. For example: "
-        "'Add colorful birthday balloons covering the walls and ceiling, hang vibrant "
-        "streamers from the ceiling, place a large balloon arch in the background, add "
-        "a Happy Birthday banner, scatter confetti on the floor, add fairy lights.' "
-        "Be VERY SPECIFIC about EVERY decoration item selected and where to place it. "
-        "The decorations must be BOLD, VIBRANT, and COMPLETELY FILL the room."
+        "The customer has uploaded their room photo. Write flux_prompt as STRONG EDITING "
+        "INSTRUCTIONS. The model must MASSIVELY TRANSFORM the room with decorations. "
+        "Write something like: "
+        "'Completely fill this space with extravagant birthday decorations. Cover every "
+        "wall floor-to-ceiling with hundreds of colorful latex and chrome balloons. Hang "
+        "thick clusters of pink, gold, and silver streamers from the ceiling. Add a huge "
+        "balloon arch at the center. Mount a glittering foil backdrop curtain on the main "
+        "wall. String fairy lights and LED curtains across the ceiling. Place foil letter "
+        "balloons spelling out \"HAPPY BIRTHDAY\". Scatter confetti everywhere. Make it "
+        "look like a professional high-end birthday party venue.' "
+        "Then LIST every selected item with exact placement and quantity. "
+        "The result must look like a COMPLETELY TRANSFORMED professional party venue — "
+        "not just a few balloons. Make decorations 10x more than you think is needed."
         if has_user_image
         else (
-            "No room photo uploaded. The flux_prompt should describe a full "
-            "photorealistic decorated room from scratch. Be very vivid and specific "
-            "about every decoration item, color, placement, and festive atmosphere."
+            "No room photo uploaded. The flux_prompt should describe a fully transformed "
+            "professional party venue from scratch — extravagant, over-the-top decorations "
+            "covering every surface. Be extremely specific about quantities, colors, and placement."
         )
     )
 
@@ -241,7 +246,7 @@ Rules:
 2. selected_item_ids must be exact ids from AVAILABLE ITEMS above only
 3. selected_rent_ids must be exact ids from RENT ITEMS above only (max 2)
 4. Total cost = kit selling_total + sum of selected item prices + sum of selected rent prices — must be <= {req.budget_max}
-5. flux_prompt: EDITING INSTRUCTIONS starting with "Add" or "Decorate" — list every selected decoration item with color/placement, make decorations bold and room-filling, NO brand names, NO text in image, ends with "{NO_TEXT}"
+5. flux_prompt: STRONG EDITING INSTRUCTIONS — the decorations must COMPLETELY TRANSFORM the space, cover every wall and ceiling, look like a professional high-end event venue. List every selected item with quantities and exact placement. Make it extravagant and over-the-top. NO brand names, NO text in image, ends with "{NO_TEXT}"
 
 Respond ONLY with this exact JSON structure:
 {{
