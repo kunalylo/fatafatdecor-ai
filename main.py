@@ -9,8 +9,6 @@ import json as json_lib
 import traceback
 import asyncio
 import re
-import struct
-import zlib
 
 app = FastAPI()
 
@@ -83,70 +81,24 @@ def parse_json_safe(text: str) -> dict:
     return json_lib.loads(text.strip())
 
 
-def _make_decoration_mask_png(size: int = 512) -> bytes:
-    """
-    Build a gradient grayscale PNG mask for decoration inpainting (pure Python, no PIL).
-
-    Mask pixel meaning for FLUX Pro Fill:
-      255 (white) = generate new content here  →  ceiling & upper walls = DECORATE
-       0  (black) = preserve original here     →  floor & furniture = KEEP
-
-    Gradient zones (top→bottom):
-      0–15%   ceiling         → 255  fully decorate
-      15–60%  upper walls     → 210  heavily decorate
-      60–78%  lower walls     → 140  moderately decorate
-      78–100% floor/furniture →  50  mostly preserve
-    """
-    def _chunk(tag: bytes, data: bytes) -> bytes:
-        crc = struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff)
-        return struct.pack('>I', len(data)) + tag + data + crc
-
-    rows = bytearray()
-    for y in range(size):
-        f = y / size
-        if   f < 0.15: v = 255
-        elif f < 0.60: v = 210
-        elif f < 0.78: v = 140
-        else:          v = 50
-        rows += b'\x00' + bytes([v] * size)
-
-    png  = b'\x89PNG\r\n\x1a\n'
-    png += _chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 0, 0, 0, 0))
-    png += _chunk(b'IDAT', zlib.compress(bytes(rows), 9))
-    png += _chunk(b'IEND', b'')
-    return png
-
-
 async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
     """
-    Inpainting pipeline:
-      1. Upload room photo to fal storage
-      2. Generate a gradient mask (walls+ceiling = white/decorate, floor = black/keep)
-      3. Upload mask to fal storage
-      4. Run FLUX Pro Fill (inpainting) — fills white mask areas with decorations
-         while preserving the original room in black mask areas
-
-    This keeps the EXACT room intact and adds decorations only where they belong.
+    FLUX Kontext — image editing model that keeps the room intact and
+    applies decoration instructions from the prompt.
     """
     img_data = image_base64
     if ',' in img_data:
         img_data = img_data.split(',', 1)[1]
     image_bytes = base64.b64decode(img_data)
-    mask_bytes  = _make_decoration_mask_png(512)
-
-    # Upload image and mask concurrently
-    fal_image_url, fal_mask_url = await asyncio.gather(
-        asyncio.to_thread(fal_client.upload, image_bytes, content_type="image/png"),
-        asyncio.to_thread(fal_client.upload, mask_bytes,  content_type="image/png"),
+    fal_image_url = await asyncio.to_thread(
+        fal_client.upload, image_bytes, content_type="image/png"
     )
-
     result = await asyncio.to_thread(
         fal_client.run,
-        "fal-ai/flux-pro/v1/fill",
+        "fal-ai/flux-pro/kontext",
         arguments={
             "prompt":              prompt,
             "image_url":           fal_image_url,
-            "mask_url":            fal_mask_url,
             "num_inference_steps": 28,
             "guidance_scale":      7.5,
             "output_format":       "jpeg",
@@ -300,15 +252,14 @@ def _build_decoration_prompt(
 
     if has_image:
         return (
-            f"The walls and ceiling of this {room_type} are covered with extravagant "
-            f"{occasion} party decorations. Every single item below is clearly visible, "
-            f"prominently placed, and fills the entire decorated area:\n"
+            f"Keep this {room_type} exactly as it is. "
+            f"Add the following {occasion} decorations directly onto the walls, ceiling, "
+            f"pergola beams, railings and every vertical surface — do not change anything else:\n"
             f"{decoration_lines}\n"
-            f"The decoration is dense and spectacular — walls covered floor-to-ceiling, "
-            f"ceiling completely draped, every corner bursting with colour. "
-            f"Looks like a high-end professional {occasion} event venue. "
-            f"Photorealistic, vibrant saturated colours, warm festive lighting, "
-            f"professional event photography quality.{special} "
+            f"Make every decoration item dense, vibrant and clearly visible. "
+            f"The floor and furniture must remain completely unchanged. "
+            f"Only the walls, ceiling and overhead structures get decorated. "
+            f"Result must look like a professional {occasion} event setup in this exact space.{special} "
             f"{NO_TEXT}"
         )
     else:
