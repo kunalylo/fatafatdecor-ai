@@ -82,7 +82,10 @@ def parse_json_safe(text: str) -> dict:
 
 
 async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
-    """Upload room photo to fal storage → run FLUX Pro Fill → return image URL."""
+    """Upload room photo to fal storage → run FLUX Dev img2img → return image URL.
+    Uses image-to-image (no mask needed) — preserves room structure, adds decorations.
+    strength=0.70 keeps 30% of original structure while allowing full decoration changes.
+    """
     img_data = image_base64
     if ',' in img_data:
         img_data = img_data.split(',', 1)[1]
@@ -94,13 +97,16 @@ async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
     )
     result = await asyncio.to_thread(
         fal_client.run,
-        "fal-ai/flux-pro/v1/fill",
+        "fal-ai/flux/dev/image-to-image",
         arguments={
             "prompt": prompt,
             "image_url": fal_image_url,
+            "strength": 0.70,
+            "num_inference_steps": 28,
+            "guidance_scale": 3.5,
             "num_images": 1,
-            "safety_tolerance": "2",
             "output_format": "jpeg",
+            "enable_safety_checker": False,
         },
     )
     return result["images"][0]["url"]
