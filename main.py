@@ -120,26 +120,29 @@ def _make_mask_png(width: int = 512, height: int = 512) -> bytes:
 
 async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
     """
-    Best-quality decoration pipeline (fal.ai only):
+    3-step decoration pipeline (fal.ai only):
 
-    Step 1 — Gemini vision   : analyse room → 2-sentence description
-    Step 2 — Build prompt    : room description + all decoration items
-    Step 3 — Try FILL first  : flux-pro/v1/fill (inpainting model — same class
-                                as gpt-image-1). Gradient mask keeps floor/furniture,
-                                opens walls+ceiling for decoration placement.
-    Step 4 — Fallback        : kontext/max if fill is unavailable.
+    Step 1 — Gemini vision : sees the room photo → writes exact room description
+             (knows the actual walls, beams, furniture, colors in this specific space)
+
+    Step 2 — Gemini text   : receives room description + selected item names
+             → writes a photorealistic FLUX prompt describing the decorated scene
+             (Gemini places each item contextually: balloons ON the pergola beams,
+              backdrop ON the concrete wall, etc — not generic placement)
+
+    Step 3 — kontext/max   : edits the photo using Gemini's natural prompt
+             (much better than our hardcoded item→visual mapping)
     """
     img_data = image_base64
     if "," in img_data:
         img_data = img_data.split(",", 1)[1]
     image_bytes = base64.b64decode(img_data)
 
-    # Upload room photo once — reused for vision + generation
     fal_image_url = await asyncio.to_thread(
         fal_client.upload, image_bytes, content_type="image/png"
     )
 
-    # ── Step 1: Gemini vision → room description (non-fatal) ─────────────────
+    # ── Step 1: Gemini vision → precise room description ─────────────────────
     room_desc = ""
     try:
         vision_result = await asyncio.to_thread(
@@ -148,50 +151,61 @@ async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
             arguments={
                 "model": "google/gemini-flash-1-5",
                 "prompt": (
-                    "In exactly 2 sentences describe ONLY the physical space: "
-                    "room/venue type, size, dominant colors, key furniture, "
-                    "walls, ceiling and architectural features. Facts only, no suggestions."
+                    "Describe this space in 3 sentences. Include: type of space, "
+                    "exact surfaces visible (walls, ceiling, beams, railings, floor), "
+                    "dominant colors, furniture, architectural features. "
+                    "Be specific — name exact features like 'wooden pergola beams', "
+                    "'concrete bench', 'patterned tile floor'. Facts only."
                 ),
                 "image_url": fal_image_url,
             },
         )
         room_desc = vision_result.get("output", "").strip()
+        print(f"[run_flux_fill] room_desc: {room_desc}")
     except Exception as e:
         print(f"[run_flux_fill] vision skipped: {e}")
 
-    full_prompt = (
-        f"{room_desc} A professional event decorator has transformed this exact space. {prompt}"
-        if room_desc else prompt
-    )
+    # ── Step 2: Gemini text → writes the FLUX prompt ──────────────────────────
+    flux_prompt = prompt  # fallback = our item-based prompt
+    if room_desc:
+        try:
+            prompt_result = await asyncio.to_thread(
+                fal_client.run,
+                "fal-ai/any-llm",
+                arguments={
+                    "model": "google/gemini-flash-1-5",
+                    "system_prompt": (
+                        "You write ultra-realistic photo description prompts for FLUX AI image generation. "
+                        "Rules: "
+                        "1. Describe the final image as if writing an alt-text for a real photograph. "
+                        "2. Place each decoration item specifically on the surfaces of this exact room — "
+                        "   use the room's actual features (beams, walls, railings, ceiling) as anchor points. "
+                        "3. Be specific about quantities, colors, density and exact placement. "
+                        "4. Write in present tense, describing what IS visible, not what to do. "
+                        "5. Keep the floor and furniture unchanged — only walls, ceiling, beams get decorated. "
+                        "6. Output ONLY the photo description, no explanation, no intro."
+                    ),
+                    "prompt": (
+                        f"Room: {room_desc}\n\n"
+                        f"Decoration items placed by a professional decorator:\n{prompt}\n\n"
+                        f"Write a 4-5 sentence ultra-realistic photo description of this decorated space. "
+                        f"Place each item on the specific surfaces of THIS room. "
+                        f"Describe exactly what a camera would capture."
+                    ),
+                },
+            )
+            flux_prompt = prompt_result.get("output", "").strip()
+            flux_prompt += f" {NO_TEXT}"
+            print(f"[run_flux_fill] gemini_flux_prompt: {flux_prompt}")
+        except Exception as e:
+            print(f"[run_flux_fill] prompt generation skipped: {e}")
 
-    # ── Step 3: Try flux-pro/v1/fill (dedicated inpainting — best quality) ───
-    try:
-        mask_bytes   = _make_mask_png(512, 512)
-        fal_mask_url = await asyncio.to_thread(
-            fal_client.upload, mask_bytes, content_type="image/png"
-        )
-        result = await asyncio.to_thread(
-            fal_client.run,
-            "fal-ai/flux-pro/v1/fill",
-            arguments={
-                "prompt":              full_prompt,
-                "image_url":           fal_image_url,
-                "mask_url":            fal_mask_url,
-                "num_inference_steps": 28,
-                "guidance_scale":      3.5,
-                "output_format":       "jpeg",
-            },
-        )
-        return result["images"][0]["url"]
-    except Exception as e:
-        print(f"[run_flux_fill] fill unavailable ({e}), falling back to kontext/max")
-
-    # ── Step 4: Fallback — kontext/max ────────────────────────────────────────
+    # ── Step 3: kontext/max — edit photo with Gemini-written prompt ───────────
     result = await asyncio.to_thread(
         fal_client.run,
         "fal-ai/flux-pro/kontext/max",
         arguments={
-            "prompt":              full_prompt,
+            "prompt":              flux_prompt,
             "image_url":           fal_image_url,
             "num_inference_steps": 28,
             "guidance_scale":      3.5,
