@@ -4,13 +4,10 @@ from pydantic import BaseModel
 from typing import Optional, List, Any
 import base64
 import os
-import io
 import json as json_lib
 import traceback
 import asyncio
 import re
-import struct
-import zlib
 
 app = FastAPI()
 
@@ -35,17 +32,6 @@ app.add_middleware(
 
 FAL_KEY = os.environ.get("FAL_KEY", "")
 os.environ["FAL_KEY"] = FAL_KEY
-
-# ── gpt-image-1 via Emergent proxy ───────────────────────────
-EMERGENT_API_KEY  = os.environ.get("EMERGENT_LLM_KEY", "sk-emergent-e1b3859D8366151216")
-EMERGENT_BASE_URL = "https://integrations.emergentagent.com/llm"
-OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
-
-def _openai_client():
-    from openai import OpenAI
-    if OPENAI_API_KEY:
-        return OpenAI(api_key=OPENAI_API_KEY)
-    return OpenAI(api_key=EMERGENT_API_KEY, base_url=EMERGENT_BASE_URL)
 
 NO_TEXT = (
     "CRITICAL: Do NOT write any text, words, letters, numbers, or labels anywhere "
@@ -94,79 +80,33 @@ def parse_json_safe(text: str) -> dict:
     return json_lib.loads(text.strip())
 
 
-def _make_mask_png(width: int = 512, height: int = 512) -> bytes:
-    """
-    Generate a decoration mask PNG in pure Python (struct + zlib, no PIL).
-
-    FLUX Pro Fill mask convention:  white (255) = fill area,  black (0) = preserve.
-    Gradient zones (top → bottom):
-      0 – 15 %   ceiling          255  ← place ceiling decorations here
-      15 – 75 %  walls / beams    220  ← place wall decorations here
-      75 – 88 %  lower walls      140  ← moderate decoration
-      88 – 100 % floor / furn.     30  ← preserve almost entirely
-    """
-    def _png_chunk(tag: bytes, data: bytes) -> bytes:
-        return (
-            struct.pack(">I", len(data))
-            + tag
-            + data
-            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-        )
-
-    rows = bytearray()
-    for y in range(height):
-        f = y / height
-        if   f < 0.15: v = 255
-        elif f < 0.75: v = 220
-        elif f < 0.88: v = 140
-        else:          v = 30
-        rows += b"\x00" + bytes([v] * width)   # filter-type 0 + pixel row
-
-    png  = b"\x89PNG\r\n\x1a\n"
-    png += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
-    png += _png_chunk(b"IDAT", zlib.compress(bytes(rows), 9))
-    png += _png_chunk(b"IEND", b"")
-    return png
-
-
 async def run_gpt_image_edit(prompt: str, image_base64: str, fal_client) -> str:
     """
-    gpt-image-1 via Emergent proxy — the correct model for decoration editing.
-    Takes the room photo + decoration instructions → returns a decorated image.
-    After generation, uploads result to fal storage so route.js gets a URL.
+    fal-ai/flux-pro/kontext/max — image editing on fal.ai.
+    Receives our clean per-item prompt (tools already filtered out)
+    and edits the room photo to add only the visual decoration items.
     """
-    import requests as http_requests
-
     img_data = image_base64
     if "," in img_data:
         img_data = img_data.split(",", 1)[1]
     image_bytes = base64.b64decode(img_data)
 
-    def _edit():
-        client    = _openai_client()
-        img_file  = io.BytesIO(image_bytes)
-        img_file.name = "room.png"
-        response  = client.images.edit(
-            model  = "gpt-image-1",
-            image  = img_file,
-            prompt = prompt,
-            n      = 1,
-            size   = "1024x1024",
-        )
-        img = response.data[0]
-        if hasattr(img, "b64_json") and img.b64_json:
-            return base64.b64decode(img.b64_json)
-        if hasattr(img, "url") and img.url:
-            return http_requests.get(img.url, timeout=60).content
-        raise Exception("No image returned from gpt-image-1")
-
-    result_bytes = await asyncio.to_thread(_edit)
-
-    # Upload result to fal storage → return a permanent URL
-    result_url = await asyncio.to_thread(
-        fal_client.upload, result_bytes, content_type="image/png"
+    fal_image_url = await asyncio.to_thread(
+        fal_client.upload, image_bytes, content_type="image/png"
     )
-    return result_url
+
+    result = await asyncio.to_thread(
+        fal_client.run,
+        "fal-ai/flux-pro/kontext/max",
+        arguments={
+            "prompt":              prompt,
+            "image_url":           fal_image_url,
+            "num_inference_steps": 28,
+            "guidance_scale":      3.5,
+            "output_format":       "jpeg",
+        },
+    )
+    return result["images"][0]["url"]
 
 
 async def run_flux_schnell(prompt: str, fal_client) -> str:
@@ -405,8 +345,7 @@ async def debug_prompt():
             + prompt_with_image
         ),
         "step_2_final_prompt_WITHOUT_room_photo": prompt_no_image,
-        "model_used": "fal-ai/flux-pro/v1/fill (inpainting) → fallback: fal-ai/flux-pro/kontext/max",
-        "mask": "Gradient PNG: ceiling=white(255), walls=220, lower=140, floor=dark(30)",
+        "model_used": "fal-ai/flux-pro/kontext/max (image editing) / fal-ai/flux/schnell (text-only)",
     }
 
 
