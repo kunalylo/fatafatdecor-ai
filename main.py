@@ -187,6 +187,20 @@ async def run_flux_schnell(prompt: str, fal_client) -> str:
 
 # ── Decoration prompt builder ────────────────────────────────
 
+# Items that are installation tools — not visible in the decorated photo
+_TOOL_KEYWORDS = {
+    "glue dot", "glue", "tape", "ribbon roll", "ribbon",
+    "fishing string", "zip tie", "wire", "nail", "hook",
+    "clip", "adhesive", "string roll", "tools", "supplies",
+    "fastener", "mount", "bracket",
+}
+
+def _is_visual_item(name: str) -> bool:
+    """Return True if this item is actually visible in a decoration photo."""
+    n = name.lower()
+    return not any(kw in n for kw in _TOOL_KEYWORDS)
+
+
 def _item_to_visual(name: str, color: str = "") -> str:
     """Map a decoration item name → specific visual placement instruction."""
     n = name.lower()
@@ -272,31 +286,28 @@ def _build_decoration_prompt(
     visuals: list[str] = []
     seen: set[str] = set()
 
-    # Kit BOM items (structural items inside the kit)
+    # Kit BOM items — skip installation tools (glue, tape, ribbon, etc.)
     if kit_obj:
         bom = kit_obj.get("bom") or kit_obj.get("kit_items") or []
         for bi in bom:
             name = bi.get("item") or bi.get("name") or ""
-            if name and name.lower() not in seen:
-                v = _item_to_visual(name)
-                visuals.append(v)
+            if name and name.lower() not in seen and _is_visual_item(name):
+                visuals.append(_item_to_visual(name))
                 seen.add(name.lower())
 
-    # Individually selected add-on items
+    # Individually selected add-on items — skip tools
     for item in sel_items:
         name  = item.get("name", "")
         color = item.get("color") or item.get("type_finish") or ""
-        if name and name.lower() not in seen:
-            v = _item_to_visual(name, color)
-            visuals.append(v)
+        if name and name.lower() not in seen and _is_visual_item(name):
+            visuals.append(_item_to_visual(name, color))
             seen.add(name.lower())
 
     # Rental items
     for r in sel_rents:
         name = r.get("name", "")
-        if name and name.lower() not in seen:
-            v = _item_to_visual(name)
-            visuals.append(v)
+        if name and name.lower() not in seen and _is_visual_item(name):
+            visuals.append(_item_to_visual(name))
             seen.add(name.lower())
 
     # Fallback if nothing selected
