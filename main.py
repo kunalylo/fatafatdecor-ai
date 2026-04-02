@@ -83,26 +83,61 @@ def parse_json_safe(text: str) -> dict:
 
 async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
     """
-    FLUX Kontext — image editing model that keeps the room intact and
-    applies decoration instructions from the prompt.
+    Two-step decoration pipeline:
+    1. Gemini vision analyses the uploaded room and returns a precise description.
+    2. kontext/max receives [room description] + [item-by-item decoration instructions]
+       so it knows exactly what the space looks like AND what to add — producing
+       far better placement than a generic prompt alone.
     """
     img_data = image_base64
     if ',' in img_data:
         img_data = img_data.split(',', 1)[1]
     image_bytes = base64.b64decode(img_data)
+
+    # Upload once, reuse URL for both vision and kontext
     fal_image_url = await asyncio.to_thread(
         fal_client.upload, image_bytes, content_type="image/png"
     )
+
+    # ── Step 1: Gemini vision → room description ─────────────────────────────
+    room_desc = ""
+    try:
+        vision_result = await asyncio.to_thread(
+            fal_client.run,
+            "fal-ai/any-llm",
+            arguments={
+                "model":   "google/gemini-flash-1-5",
+                "prompt": (
+                    "In 2 short sentences describe ONLY the physical space in this photo: "
+                    "room type, size feeling, dominant colors, key furniture and architectural "
+                    "features. No opinions, no suggestions, facts only."
+                ),
+                "image_url": fal_image_url,
+            },
+        )
+        room_desc = vision_result.get("output", "").strip()
+    except Exception as e:
+        print(f"[run_flux_fill] vision step failed (non-fatal): {e}")
+
+    # ── Step 2: Merge room context into decoration prompt ────────────────────
+    if room_desc:
+        full_prompt = (
+            f"{room_desc} "
+            f"A professional event decorator has now decorated this exact space. {prompt}"
+        )
+    else:
+        full_prompt = prompt
+
+    # ── Step 3: kontext/max — edit the photo with the enriched prompt ────────
     result = await asyncio.to_thread(
         fal_client.run,
-        "fal-ai/flux-pro/kontext",
+        "fal-ai/flux-pro/kontext/max",
         arguments={
-            "prompt":              prompt,
+            "prompt":              full_prompt,
             "image_url":           fal_image_url,
             "num_inference_steps": 28,
             "guidance_scale":      3.5,
             "output_format":       "jpeg",
-            "safety_tolerance":    "2",
         },
     )
     return result["images"][0]["url"]
@@ -255,19 +290,20 @@ def _build_decoration_prompt(
 
     if has_image:
         return (
-            f"A real photograph of this exact {room_type} decorated professionally for a {occasion} celebration. "
-            f"The room structure, furniture, floor and walls remain completely unchanged. "
-            f"A professional decorator has added exactly these items and nothing else: {decoration_sentence}. "
-            f"Every item is physically placed in the space — attached to walls, hung from ceiling, "
-            f"clustered in corners, draped over beams — exactly as a real decorator would do it. "
-            f"The decorations are dense, vibrant, and fill the entire space naturally. "
-            f"Ultra-realistic event photography, warm festive lighting.{special} {NO_TEXT}"
+            f"The space has been professionally decorated for a {occasion} celebration "
+            f"using ONLY these items: {decoration_sentence}. "
+            f"Every single item is physically present and clearly visible — "
+            f"tied to walls, hung from ceiling, clustered densely, draped over every beam and railing. "
+            f"The decorations are abundant, vivid, and fill every corner of the space. "
+            f"Floor and furniture are completely unchanged. "
+            f"Ultra-realistic professional event photography, vibrant colours, warm festive lighting.{special} {NO_TEXT}"
         )
     else:
         return (
-            f"Ultra-realistic professional event photograph of a {room_type} decorated for {occasion}. "
-            f"A professional decorator has set up exactly: {decoration_sentence}. "
-            f"Every item is physically present, realistically placed, vibrant and detailed. "
+            f"Ultra-realistic professional event photograph of a {room_type} "
+            f"decorated for a {occasion} celebration. "
+            f"A professional decorator has set up: {decoration_sentence}. "
+            f"Every item is physically present, realistically placed, dense and vibrant. "
             f"Warm festive lighting, high-end event photography quality.{special} {NO_TEXT}"
         )
 
