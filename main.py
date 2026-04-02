@@ -100,7 +100,7 @@ async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
             "prompt":              prompt,
             "image_url":           fal_image_url,
             "num_inference_steps": 28,
-            "guidance_scale":      7.5,
+            "guidance_scale":      3.5,
             "output_format":       "jpeg",
             "safety_tolerance":    "2",
         },
@@ -250,26 +250,25 @@ def _build_decoration_prompt(
     decoration_lines = "\n".join(f"- {v}" for v in visuals)
     special = f" Special customer request: {description}." if description else ""
 
+    # Build natural flowing scene description for kontext
+    decoration_sentence = ", ".join(visuals) if visuals else f"colorful {occasion} party decorations"
+
     if has_image:
         return (
-            f"Keep this {room_type} exactly as it is. "
-            f"Add the following {occasion} decorations directly onto the walls, ceiling, "
-            f"pergola beams, railings and every vertical surface — do not change anything else:\n"
-            f"{decoration_lines}\n"
-            f"Make every decoration item dense, vibrant and clearly visible. "
-            f"The floor and furniture must remain completely unchanged. "
-            f"Only the walls, ceiling and overhead structures get decorated. "
-            f"Result must look like a professional {occasion} event setup in this exact space.{special} "
-            f"{NO_TEXT}"
+            f"A real photograph of this exact {room_type} decorated professionally for a {occasion} celebration. "
+            f"The room structure, furniture, floor and walls remain completely unchanged. "
+            f"A professional decorator has added exactly these items and nothing else: {decoration_sentence}. "
+            f"Every item is physically placed in the space — attached to walls, hung from ceiling, "
+            f"clustered in corners, draped over beams — exactly as a real decorator would do it. "
+            f"The decorations are dense, vibrant, and fill the entire space naturally. "
+            f"Ultra-realistic event photography, warm festive lighting.{special} {NO_TEXT}"
         )
     else:
         return (
-            f"Professional photorealistic {room_type} completely transformed into a {occasion} celebration venue. "
-            f"Every decoration listed below is prominently visible and fills the entire space:\n"
-            f"{decoration_lines}\n"
-            f"Walls and ceiling completely covered, vibrant festive atmosphere, "
-            f"professional event photography quality, warm ambient lighting, 4K.{special} "
-            f"{NO_TEXT}"
+            f"Ultra-realistic professional event photograph of a {room_type} decorated for {occasion}. "
+            f"A professional decorator has set up exactly: {decoration_sentence}. "
+            f"Every item is physically present, realistically placed, vibrant and detailed. "
+            f"Warm festive lighting, high-end event photography quality.{special} {NO_TEXT}"
         )
 
 
