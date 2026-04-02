@@ -34,8 +34,6 @@ app.add_middleware(
 FAL_KEY = os.environ.get("FAL_KEY", "")
 os.environ["FAL_KEY"] = FAL_KEY
 
-EMERGENT_API_KEY  = os.environ.get("EMERGENT_LLM_KEY", "sk-emergent-e1b3859D8366151216")
-EMERGENT_BASE_URL = "https://integrations.emergentagent.com/llm"
 
 NO_TEXT = (
     "CRITICAL: Do NOT write any text, words, letters, numbers, or labels anywhere "
@@ -84,30 +82,32 @@ def parse_json_safe(text: str) -> dict:
     return json_lib.loads(text.strip())
 
 
-async def run_gpt_image_edit(prompt: str, image_base64: str, fal_client=None) -> str:
+async def run_gpt_image_edit(prompt: str, image_base64: str, fal_client) -> str:
     """
-    gpt-image-1 via Emergent proxy — edits room photo to add decorations.
+    fal-ai/flux-pro/kontext/max — edits room photo to add decorations.
     Receives our clean per-item prompt (tools already filtered out).
     """
-    from openai import OpenAI
-
     img_data = image_base64
     if "," in img_data:
         img_data = img_data.split(",", 1)[1]
     image_bytes = base64.b64decode(img_data)
 
-    client = OpenAI(api_key=EMERGENT_API_KEY, base_url=EMERGENT_BASE_URL)
-
-    response = await asyncio.to_thread(
-        client.images.edit,
-        model="gpt-image-1",
-        image=("room.png", image_bytes, "image/png"),
-        prompt=prompt,
-        n=1,
-        size="1024x1024",
+    fal_image_url = await asyncio.to_thread(
+        fal_client.upload, image_bytes, content_type="image/png"
     )
-    b64 = response.data[0].b64_json
-    return f"data:image/png;base64,{b64}"
+
+    result = await asyncio.to_thread(
+        fal_client.run,
+        "fal-ai/flux-pro/kontext/max",
+        arguments={
+            "prompt":              prompt,
+            "image_url":           fal_image_url,
+            "num_inference_steps": 28,
+            "guidance_scale":      3.5,
+            "output_format":       "jpeg",
+        },
+    )
+    return result["images"][0]["url"]
 
 
 async def run_flux_schnell(prompt: str, fal_client) -> str:
