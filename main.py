@@ -377,6 +377,62 @@ async def health():
     }
 
 
+@app.get("/debug-prompt")
+async def debug_prompt():
+    """
+    Returns a real example of the prompt sent to the image model.
+    Uses the Boss Baby Blast kit (same as in the app) so you can see exactly
+    what instructions the model receives for a Birthday decoration.
+    """
+    example_kit = {
+        "id": "KTS-001", "name": "Boss Baby Blast",
+        "bom": [
+            {"item": "Latex Balloons (Mix palette)", "qty": 200, "uom": "pcs"},
+            {"item": "Foil Backdrop Curtain Silver",  "qty": 1,   "uom": "pcs"},
+        ],
+    }
+    example_items = [
+        {"id": "i1", "name": "Foil Number Balloon",          "color": "Silver"},
+        {"id": "i2", "name": "Transparent Confetti Balloon", "color": ""},
+        {"id": "i3", "name": "Mix Balloon Set",              "color": "Mix"},
+        {"id": "i4", "name": "LED Pillar Candle Set (3 pcs)","color": ""},
+    ]
+    prompt_with_image = _build_decoration_prompt(
+        occasion   = "Birthday",
+        room_type  = "Rooftop Terrace",
+        description= "",
+        kit_obj    = example_kit,
+        sel_items  = example_items,
+        sel_rents  = [],
+        has_image  = True,
+    )
+    prompt_no_image = _build_decoration_prompt(
+        occasion   = "Birthday",
+        room_type  = "Living Room",
+        description= "Pink and gold theme",
+        kit_obj    = example_kit,
+        sel_items  = example_items,
+        sel_rents  = [],
+        has_image  = False,
+    )
+    return {
+        "note": "This is the EXACT prompt structure sent to the AI image model",
+        "step_1_gemini_vision_asks": (
+            "In exactly 2 sentences describe ONLY the physical space: "
+            "room/venue type, size, dominant colors, key furniture, "
+            "walls, ceiling and architectural features. Facts only, no suggestions."
+        ),
+        "step_2_final_prompt_WITH_room_photo": (
+            "[Gemini room description here] "
+            "A professional event decorator has transformed this exact space. "
+            + prompt_with_image
+        ),
+        "step_2_final_prompt_WITHOUT_room_photo": prompt_no_image,
+        "model_used": "fal-ai/flux-pro/v1/fill (inpainting) → fallback: fal-ai/flux-pro/kontext/max",
+        "mask": "Gradient PNG: ceiling=white(255), walls=220, lower=140, floor=dark(30)",
+    }
+
+
 @app.post("/smart-generate")
 async def smart_generate(req: SmartGenerateRequest):
     """
@@ -541,6 +597,9 @@ Respond ONLY with this exact JSON:
         sel_rents   = [r for r in req.rent_items if r.get("id") in set(sel_rent_ids)],
         has_image   = has_user_image,
     )
+
+    # Log full prompt so it's visible in Railway logs
+    print(f"\n{'='*60}\n[PROMPT SENT TO MODEL]\n{flux_prompt}\n{'='*60}\n")
 
     # ── STEP 6: FLUX generates the image ────────────────────────────────────
     try:
