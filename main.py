@@ -36,6 +36,17 @@ app.add_middleware(
 FAL_KEY = os.environ.get("FAL_KEY", "")
 os.environ["FAL_KEY"] = FAL_KEY
 
+# ── gpt-image-1 via Emergent proxy ───────────────────────────
+EMERGENT_API_KEY  = os.environ.get("EMERGENT_LLM_KEY", "sk-emergent-e1b3859D8366151216")
+EMERGENT_BASE_URL = "https://integrations.emergentagent.com/llm"
+OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
+
+def _openai_client():
+    from openai import OpenAI
+    if OPENAI_API_KEY:
+        return OpenAI(api_key=OPENAI_API_KEY)
+    return OpenAI(api_key=EMERGENT_API_KEY, base_url=EMERGENT_BASE_URL)
+
 NO_TEXT = (
     "CRITICAL: Do NOT write any text, words, letters, numbers, or labels anywhere "
     "in the image — no text on balloons, banners, backdrops, walls, floors, or any "
@@ -118,101 +129,44 @@ def _make_mask_png(width: int = 512, height: int = 512) -> bytes:
     return png
 
 
-async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
+async def run_gpt_image_edit(prompt: str, image_base64: str, fal_client) -> str:
     """
-    3-step decoration pipeline (fal.ai only):
-
-    Step 1 — Gemini vision : sees the room photo → writes exact room description
-             (knows the actual walls, beams, furniture, colors in this specific space)
-
-    Step 2 — Gemini text   : receives room description + selected item names
-             → writes a photorealistic FLUX prompt describing the decorated scene
-             (Gemini places each item contextually: balloons ON the pergola beams,
-              backdrop ON the concrete wall, etc — not generic placement)
-
-    Step 3 — kontext/max   : edits the photo using Gemini's natural prompt
-             (much better than our hardcoded item→visual mapping)
+    gpt-image-1 via Emergent proxy — the correct model for decoration editing.
+    Takes the room photo + decoration instructions → returns a decorated image.
+    After generation, uploads result to fal storage so route.js gets a URL.
     """
+    import requests as http_requests
+
     img_data = image_base64
     if "," in img_data:
         img_data = img_data.split(",", 1)[1]
     image_bytes = base64.b64decode(img_data)
 
-    fal_image_url = await asyncio.to_thread(
-        fal_client.upload, image_bytes, content_type="image/png"
-    )
-
-    # ── Step 1: Gemini vision → precise room description ─────────────────────
-    room_desc = ""
-    try:
-        vision_result = await asyncio.to_thread(
-            fal_client.run,
-            "fal-ai/any-llm",
-            arguments={
-                "model": "google/gemini-flash-1-5",
-                "prompt": (
-                    "Describe this space in 3 sentences. Include: type of space, "
-                    "exact surfaces visible (walls, ceiling, beams, railings, floor), "
-                    "dominant colors, furniture, architectural features. "
-                    "Be specific — name exact features like 'wooden pergola beams', "
-                    "'concrete bench', 'patterned tile floor'. Facts only."
-                ),
-                "image_url": fal_image_url,
-            },
+    def _edit():
+        client    = _openai_client()
+        img_file  = io.BytesIO(image_bytes)
+        img_file.name = "room.png"
+        response  = client.images.edit(
+            model  = "gpt-image-1",
+            image  = img_file,
+            prompt = prompt,
+            n      = 1,
+            size   = "1024x1024",
         )
-        room_desc = vision_result.get("output", "").strip()
-        print(f"[run_flux_fill] room_desc: {room_desc}")
-    except Exception as e:
-        print(f"[run_flux_fill] vision skipped: {e}")
+        img = response.data[0]
+        if hasattr(img, "b64_json") and img.b64_json:
+            return base64.b64decode(img.b64_json)
+        if hasattr(img, "url") and img.url:
+            return http_requests.get(img.url, timeout=60).content
+        raise Exception("No image returned from gpt-image-1")
 
-    # ── Step 2: Gemini text → writes the FLUX prompt ──────────────────────────
-    flux_prompt = prompt  # fallback = our item-based prompt
-    if room_desc:
-        try:
-            prompt_result = await asyncio.to_thread(
-                fal_client.run,
-                "fal-ai/any-llm",
-                arguments={
-                    "model": "google/gemini-flash-1-5",
-                    "system_prompt": (
-                        "You write ultra-realistic photo description prompts for FLUX AI image generation. "
-                        "Rules: "
-                        "1. Describe the final image as if writing an alt-text for a real photograph. "
-                        "2. Place each decoration item specifically on the surfaces of this exact room — "
-                        "   use the room's actual features (beams, walls, railings, ceiling) as anchor points. "
-                        "3. Be specific about quantities, colors, density and exact placement. "
-                        "4. Write in present tense, describing what IS visible, not what to do. "
-                        "5. Keep the floor and furniture unchanged — only walls, ceiling, beams get decorated. "
-                        "6. Output ONLY the photo description, no explanation, no intro."
-                    ),
-                    "prompt": (
-                        f"Room: {room_desc}\n\n"
-                        f"Decoration items placed by a professional decorator:\n{prompt}\n\n"
-                        f"Write a 4-5 sentence ultra-realistic photo description of this decorated space. "
-                        f"Place each item on the specific surfaces of THIS room. "
-                        f"Describe exactly what a camera would capture."
-                    ),
-                },
-            )
-            flux_prompt = prompt_result.get("output", "").strip()
-            flux_prompt += f" {NO_TEXT}"
-            print(f"[run_flux_fill] gemini_flux_prompt: {flux_prompt}")
-        except Exception as e:
-            print(f"[run_flux_fill] prompt generation skipped: {e}")
+    result_bytes = await asyncio.to_thread(_edit)
 
-    # ── Step 3: kontext/max — edit photo with Gemini-written prompt ───────────
-    result = await asyncio.to_thread(
-        fal_client.run,
-        "fal-ai/flux-pro/kontext/max",
-        arguments={
-            "prompt":              flux_prompt,
-            "image_url":           fal_image_url,
-            "num_inference_steps": 28,
-            "guidance_scale":      3.5,
-            "output_format":       "jpeg",
-        },
+    # Upload result to fal storage → return a permanent URL
+    result_url = await asyncio.to_thread(
+        fal_client.upload, result_bytes, content_type="image/png"
     )
-    return result["images"][0]["url"]
+    return result_url
 
 
 async def run_flux_schnell(prompt: str, fal_client) -> str:
@@ -362,21 +316,19 @@ def _build_decoration_prompt(
 
     if has_image:
         return (
-            f"The space has been professionally decorated for a {occasion} celebration "
-            f"using ONLY these items: {decoration_sentence}. "
-            f"Every single item is physically present and clearly visible — "
-            f"tied to walls, hung from ceiling, clustered densely, draped over every beam and railing. "
-            f"The decorations are abundant, vivid, and fill every corner of the space. "
-            f"Floor and furniture are completely unchanged. "
-            f"Ultra-realistic professional event photography, vibrant colours, warm festive lighting.{special} {NO_TEXT}"
+            f"Decorate this {room_type} for a {occasion} celebration. "
+            f"Add ONLY these exact decoration items — nothing else:\n"
+            f"{decoration_sentence}.\n"
+            f"Place every item realistically as a professional decorator would. "
+            f"Keep all furniture, floor and walls exactly as they are — "
+            f"only add the listed decorations on top. "
+            f"Make it look like a real professionally decorated space.{special} {NO_TEXT}"
         )
     else:
         return (
-            f"Ultra-realistic professional event photograph of a {room_type} "
-            f"decorated for a {occasion} celebration. "
-            f"A professional decorator has set up: {decoration_sentence}. "
-            f"Every item is physically present, realistically placed, dense and vibrant. "
-            f"Warm festive lighting, high-end event photography quality.{special} {NO_TEXT}"
+            f"Professional photorealistic {room_type} decorated for a {occasion} celebration. "
+            f"Decorations: {decoration_sentence}. "
+            f"Every item prominently placed, dense and vibrant, warm festive lighting.{special} {NO_TEXT}"
         )
 
 
@@ -615,14 +567,14 @@ Respond ONLY with this exact JSON:
     # Log full prompt so it's visible in Railway logs
     print(f"\n{'='*60}\n[PROMPT SENT TO MODEL]\n{flux_prompt}\n{'='*60}\n")
 
-    # ── STEP 6: FLUX generates the image ────────────────────────────────────
+    # ── STEP 6: Generate the decorated image ────────────────────────────────
     try:
         if has_user_image:
-            image_url = await run_flux_fill(flux_prompt, req.image_base64, fal_client)
+            image_url = await run_gpt_image_edit(flux_prompt, req.image_base64, fal_client)
         else:
             image_url = await run_flux_schnell(flux_prompt, fal_client)
     except Exception as e:
-        print(f"[smart-generate] FLUX error:\n{traceback.format_exc()}")
+        print(f"[smart-generate] generation error:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
     return {
@@ -644,12 +596,12 @@ async def generate_decoration(req: GenerateRequest):
     import fal_client
     try:
         if req.image_base64:
-            image_url = await run_flux_fill(req.prompt, req.image_base64, fal_client)
+            image_url = await run_gpt_image_edit(req.prompt, req.image_base64, fal_client)
         else:
             image_url = await run_flux_schnell(req.prompt, fal_client)
         return {"image_url": image_url, "success": True}
     except Exception as e:
-        print(f"[generate] FLUX error:\n{traceback.format_exc()}")
+        print(f"[generate] error:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
