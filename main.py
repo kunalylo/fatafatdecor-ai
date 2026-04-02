@@ -9,6 +9,8 @@ import json as json_lib
 import traceback
 import asyncio
 import re
+import struct
+import zlib
 
 app = FastAPI()
 
@@ -81,54 +83,110 @@ def parse_json_safe(text: str) -> dict:
     return json_lib.loads(text.strip())
 
 
+def _make_mask_png(width: int = 512, height: int = 512) -> bytes:
+    """
+    Generate a decoration mask PNG in pure Python (struct + zlib, no PIL).
+
+    FLUX Pro Fill mask convention:  white (255) = fill area,  black (0) = preserve.
+    Gradient zones (top → bottom):
+      0 – 15 %   ceiling          255  ← place ceiling decorations here
+      15 – 75 %  walls / beams    220  ← place wall decorations here
+      75 – 88 %  lower walls      140  ← moderate decoration
+      88 – 100 % floor / furn.     30  ← preserve almost entirely
+    """
+    def _png_chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    rows = bytearray()
+    for y in range(height):
+        f = y / height
+        if   f < 0.15: v = 255
+        elif f < 0.75: v = 220
+        elif f < 0.88: v = 140
+        else:          v = 30
+        rows += b"\x00" + bytes([v] * width)   # filter-type 0 + pixel row
+
+    png  = b"\x89PNG\r\n\x1a\n"
+    png += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+    png += _png_chunk(b"IDAT", zlib.compress(bytes(rows), 9))
+    png += _png_chunk(b"IEND", b"")
+    return png
+
+
 async def run_flux_fill(prompt: str, image_base64: str, fal_client) -> str:
     """
-    Two-step decoration pipeline:
-    1. Gemini vision analyses the uploaded room and returns a precise description.
-    2. kontext/max receives [room description] + [item-by-item decoration instructions]
-       so it knows exactly what the space looks like AND what to add — producing
-       far better placement than a generic prompt alone.
+    Best-quality decoration pipeline (fal.ai only):
+
+    Step 1 — Gemini vision   : analyse room → 2-sentence description
+    Step 2 — Build prompt    : room description + all decoration items
+    Step 3 — Try FILL first  : flux-pro/v1/fill (inpainting model — same class
+                                as gpt-image-1). Gradient mask keeps floor/furniture,
+                                opens walls+ceiling for decoration placement.
+    Step 4 — Fallback        : kontext/max if fill is unavailable.
     """
     img_data = image_base64
-    if ',' in img_data:
-        img_data = img_data.split(',', 1)[1]
+    if "," in img_data:
+        img_data = img_data.split(",", 1)[1]
     image_bytes = base64.b64decode(img_data)
 
-    # Upload once, reuse URL for both vision and kontext
+    # Upload room photo once — reused for vision + generation
     fal_image_url = await asyncio.to_thread(
         fal_client.upload, image_bytes, content_type="image/png"
     )
 
-    # ── Step 1: Gemini vision → room description ─────────────────────────────
+    # ── Step 1: Gemini vision → room description (non-fatal) ─────────────────
     room_desc = ""
     try:
         vision_result = await asyncio.to_thread(
             fal_client.run,
             "fal-ai/any-llm",
             arguments={
-                "model":   "google/gemini-flash-1-5",
+                "model": "google/gemini-flash-1-5",
                 "prompt": (
-                    "In 2 short sentences describe ONLY the physical space in this photo: "
-                    "room type, size feeling, dominant colors, key furniture and architectural "
-                    "features. No opinions, no suggestions, facts only."
+                    "In exactly 2 sentences describe ONLY the physical space: "
+                    "room/venue type, size, dominant colors, key furniture, "
+                    "walls, ceiling and architectural features. Facts only, no suggestions."
                 ),
                 "image_url": fal_image_url,
             },
         )
         room_desc = vision_result.get("output", "").strip()
     except Exception as e:
-        print(f"[run_flux_fill] vision step failed (non-fatal): {e}")
+        print(f"[run_flux_fill] vision skipped: {e}")
 
-    # ── Step 2: Merge room context into decoration prompt ────────────────────
-    if room_desc:
-        full_prompt = (
-            f"{room_desc} "
-            f"A professional event decorator has now decorated this exact space. {prompt}"
+    full_prompt = (
+        f"{room_desc} A professional event decorator has transformed this exact space. {prompt}"
+        if room_desc else prompt
+    )
+
+    # ── Step 3: Try flux-pro/v1/fill (dedicated inpainting — best quality) ───
+    try:
+        mask_bytes   = _make_mask_png(512, 512)
+        fal_mask_url = await asyncio.to_thread(
+            fal_client.upload, mask_bytes, content_type="image/png"
         )
-    else:
-        full_prompt = prompt
+        result = await asyncio.to_thread(
+            fal_client.run,
+            "fal-ai/flux-pro/v1/fill",
+            arguments={
+                "prompt":              full_prompt,
+                "image_url":           fal_image_url,
+                "mask_url":            fal_mask_url,
+                "num_inference_steps": 28,
+                "guidance_scale":      3.5,
+                "output_format":       "jpeg",
+            },
+        )
+        return result["images"][0]["url"]
+    except Exception as e:
+        print(f"[run_flux_fill] fill unavailable ({e}), falling back to kontext/max")
 
-    # ── Step 3: kontext/max — edit the photo with the enriched prompt ────────
+    # ── Step 4: Fallback — kontext/max ────────────────────────────────────────
     result = await asyncio.to_thread(
         fal_client.run,
         "fal-ai/flux-pro/kontext/max",
