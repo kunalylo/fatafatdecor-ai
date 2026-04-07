@@ -32,11 +32,10 @@ app.add_middleware(
 # Item selection:   fal-ai/any-llm → google/gemini-flash-1-5
 # ============================================================
 
-FAL_KEY           = os.environ.get("FAL_KEY", "")
+FAL_KEY        = os.environ.get("FAL_KEY", "")
 os.environ["FAL_KEY"] = FAL_KEY
 
-EMERGENT_API_KEY  = os.environ.get("EMERGENT_LLM_KEY", "sk-emergent-e1b3859D8366151216")
-EMERGENT_BASE_URL = "https://integrations.emergentagent.com/llm"
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 NO_TEXT = (
     "Do NOT add any text, words, letters, numbers, or labels anywhere in the image — "
@@ -108,7 +107,7 @@ async def run_gpt_image_edit(prompt: str, image_bytes: bytes) -> str:
     Returns base64 data URL of the decorated image.
     """
     from openai import OpenAI
-    client = OpenAI(api_key=EMERGENT_API_KEY, base_url=EMERGENT_BASE_URL)
+    client = OpenAI(api_key=OPENAI_API_KEY)
 
     response = await asyncio.to_thread(
         client.images.edit,
@@ -303,7 +302,8 @@ async def health():
     return {
         "status": "ok",
         "fal_key_configured": bool(FAL_KEY),
-        "image_model": "gpt-image-1 via Emergent proxy",
+        "openai_key_configured": bool(OPENAI_API_KEY),
+        "image_model": "gpt-image-1 via OpenAI direct",
         "selection_model": "gemini-flash-1-5 via fal any-llm",
         "endpoints": ["/smart-generate", "/generate", "/analyze-decoration"],
     }
