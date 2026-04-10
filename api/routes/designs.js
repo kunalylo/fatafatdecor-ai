@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { connectToMongo } from '../db.js'
-import { getUserIdFromRequest } from '../jwt.js'
+import { requireUser } from '../jwt.js'
 import { asyncRoute } from '../helpers.js'
 import { AI_SERVICE_URL, IMAGEKIT_PRIVATE_KEY } from '../config.js'
 
@@ -35,13 +35,13 @@ async function uploadToImageKit(base64OrUrl, designId) {
   }
 }
 
-// POST /designs/generate
-router.post('/designs/generate', asyncRoute(async (req, res, ok, err) => {
+// POST /designs/generate — requires JWT
+router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
+  const user_id = req.userId
   const body = req.body
   const { room_type, occasion, description, original_image, budget_min, budget_max } = body
-  const user_id = await getUserIdFromRequest(req, body.user_id)
-  if (!user_id || !room_type || !occasion) return err('user_id, room_type, occasion required')
+  if (!room_type || !occasion) return err('room_type and occasion required')
 
   if (!VALID_ROOM_TYPES.includes(room_type)) return err('Invalid room type', 400)
   if (!VALID_OCCASIONS.includes(occasion))   return err('Invalid occasion', 400)
@@ -180,23 +180,22 @@ router.post('/designs/generate', asyncRoute(async (req, res, ok, err) => {
   return ok({ ...cleanDesign, remaining_credits: creditResult.credits, kit_used: !!selectedKit })
 }))
 
-// GET /designs
-router.get('/designs', asyncRoute(async (req, res, ok, err) => {
+// GET /designs — requires JWT, only returns own designs
+router.get('/designs', requireUser, asyncRoute(async (req, res, ok) => {
   const db      = await connectToMongo()
-  const user_id = await getUserIdFromRequest(req, req.query.user_id)
-  if (!user_id) return err('user_id required')
-  const designs = await db.collection('designs').find({ user_id }).sort({ created_at: -1 }).limit(50).toArray()
+  const designs = await db.collection('designs').find({ user_id: req.userId }).sort({ created_at: -1 }).limit(50).toArray()
   return ok(designs.map(({ _id, ...d }) => ({
     ...d,
     decorated_image: d.decorated_image?.startsWith('data:') ? null : (d.decorated_image || null),
   })))
 }))
 
-// GET /designs/:id
-router.get('/designs/:id', asyncRoute(async (req, res, ok, err) => {
+// GET /designs/:id — requires JWT, only returns own design
+router.get('/designs/:id', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db     = await connectToMongo()
   const design = await db.collection('designs').findOne({ id: req.params.id })
   if (!design) return err('Design not found', 404)
+  if (design.user_id !== req.userId) return err('Not authorized', 403)
   const { _id, ...clean } = design
   return ok(clean)
 }))

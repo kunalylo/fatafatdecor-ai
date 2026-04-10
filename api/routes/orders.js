@@ -1,21 +1,22 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { connectToMongo } from '../db.js'
-import { getUserIdFromRequest } from '../jwt.js'
+import { requireUser } from '../jwt.js'
 import { sendWhatsApp, asyncRoute } from '../helpers.js'
 
 const router = Router()
 
-// POST /orders
-router.post('/orders', asyncRoute(async (req, res, ok, err) => {
+// POST /orders — requires JWT
+router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
   const body = req.body
+  const user_id = req.userId // from JWT
   const { design_id, delivery_address, delivery_landmark, delivery_lat, delivery_lng, total_override, gift_items, gift_total } = body
-  const user_id = await getUserIdFromRequest(req, body.user_id)
-  if (!user_id || !design_id) return err('user_id, design_id required')
+  if (!design_id) return err('design_id required')
 
   const design = await db.collection('designs').findOne({ id: design_id })
   if (!design) return err('Design not found', 404)
+  if (design.user_id && design.user_id !== user_id) return err('Design does not belong to this user', 403)
 
   let finalTotal = design.total_cost
   if (total_override) {
@@ -24,7 +25,6 @@ router.post('/orders', asyncRoute(async (req, res, ok, err) => {
     if (overrideNum < minAllowed || overrideNum > design.total_cost) return err('Invalid total override amount', 400)
     finalTotal = overrideNum
   }
-  if (design.user_id && design.user_id !== user_id) return err('Design does not belong to this user', 403)
 
   const hasGifts           = Array.isArray(gift_items) && gift_items.length > 0
   const computedGiftTotal  = hasGifts ? gift_items.reduce((s, g) => s + (Number(g.price) || 0) * (Number(g.quantity) || 1), 0) : 0
@@ -37,6 +37,7 @@ router.post('/orders', asyncRoute(async (req, res, ok, err) => {
     delivery_person_id: null, delivery_slot: null, delivery_status: 'pending',
     delivery_address: delivery_address || '', delivery_landmark: delivery_landmark || '',
     delivery_location: { lat: delivery_lat || null, lng: delivery_lng || null },
+    delivery_lat: delivery_lat || null, delivery_lng: delivery_lng || null,
     assigned_decorators: [], accepted_decorators: [],
     has_gifts: hasGifts, gift_items: hasGifts ? gift_items : [],
     gift_total: hasGifts ? (gift_total !== undefined ? Number(gift_total) : computedGiftTotal) : 0,
@@ -44,6 +45,7 @@ router.post('/orders', asyncRoute(async (req, res, ok, err) => {
   }
   await db.collection('orders').insertOne(order)
 
+  // Assign all active decorators and notify them
   const availablePersons = await db.collection('delivery_persons').find({ is_active: true }).toArray()
   if (availablePersons.length > 0) {
     const assignedIds  = availablePersons.map(p => p.id)
@@ -63,44 +65,43 @@ router.post('/orders', asyncRoute(async (req, res, ok, err) => {
   return ok(clean)
 }))
 
-// GET /orders
-router.get('/orders', asyncRoute(async (req, res, ok, err) => {
-  const db      = await connectToMongo()
-  const user_id = await getUserIdFromRequest(req, req.query.user_id)
-  if (!user_id) return err('user_id required')
-  const orders = await db.collection('orders').find({ user_id }).sort({ created_at: -1 }).limit(50).toArray()
+// GET /orders — requires JWT, only returns own orders
+router.get('/orders', requireUser, asyncRoute(async (req, res, ok) => {
+  const db     = await connectToMongo()
+  const orders = await db.collection('orders').find({ user_id: req.userId }).sort({ created_at: -1 }).limit(50).toArray()
   return ok(orders.map(({ _id, ...o }) => o))
 }))
 
-// GET /orders/:id
-router.get('/orders/:id', asyncRoute(async (req, res, ok, err) => {
+// GET /orders/:id — requires JWT, only returns own order
+router.get('/orders/:id', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db    = await connectToMongo()
   const order = await db.collection('orders').findOne({ id: req.params.id })
   if (!order) return err('Order not found', 404)
+  if (order.user_id !== req.userId) return err('Not authorized', 403)
   const { _id, ...clean } = order
   return ok(clean)
 }))
 
-// POST /orders/:id/request-slot
-router.post('/orders/:id/request-slot', asyncRoute(async (req, res, ok, err) => {
-  const db      = await connectToMongo()
+// POST /orders/:id/request-slot — requires JWT
+router.post('/orders/:id/request-slot', requireUser, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
   const { date, hour } = req.body
-  const user_id = await getUserIdFromRequest(req, req.body.user_id)
-  if (!date || hour === undefined || !user_id) return err('date, hour, user_id required')
+  if (!date || hour === undefined) return err('date and hour required')
   const order = await db.collection('orders').findOne({ id: req.params.id })
   if (!order) return err('Order not found', 404)
-  if (order.user_id !== user_id) return err('Not authorized', 403)
+  if (order.user_id !== req.userId) return err('Not authorized', 403)
   await db.collection('orders').updateOne({ id: req.params.id }, { $set: { requested_slot: { date, hour }, delivery_status: 'pending' } })
   return ok({ success: true })
 }))
 
-// POST /orders/auto-reassign
-router.post('/orders/auto-reassign', asyncRoute(async (req, res, ok, err) => {
+// POST /orders/auto-reassign — requires JWT, only for own orders
+router.post('/orders/auto-reassign', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
   const { order_id } = req.body
   if (!order_id) return err('order_id required')
   const order = await db.collection('orders').findOne({ id: order_id })
   if (!order) return err('Order not found', 404)
+  if (order.user_id !== req.userId) return err('Not authorized', 403)
   if (order.delivery_status !== 'pending' && order.delivery_status !== 'assigned') return ok({ reassigned: false, reason: 'already progressed' })
   if (order.delivery_person_id) return ok({ reassigned: false, reason: 'decorator already assigned' })
   const ageMs = Date.now() - new Date(order.created_at).getTime()

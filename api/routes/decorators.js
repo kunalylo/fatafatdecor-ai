@@ -3,16 +3,19 @@ import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
 import { hashPwd, sendWhatsApp, asyncRoute } from '../helpers.js'
+import { signToken, requireDp } from '../jwt.js'
 
 const router = Router()
 
-// ── Delivery Persons CRUD ──────────────────────────────────────
+// ── Delivery Persons CRUD (admin only — guarded by admin router in practice) ───
+// Note: these endpoints are meant for admin use. Do NOT mount them on public paths
+// without an admin check in the parent router.
 
 // GET /delivery-persons
 router.get('/delivery-persons', asyncRoute(async (req, res, ok) => {
   const db  = await connectToMongo()
   const dps = await db.collection('delivery_persons').find({}).toArray()
-  return ok(dps.map(({ _id, ...dp }) => dp))
+  return ok(dps.map(({ _id, password: _, ...dp }) => dp))
 }))
 
 // POST /delivery-persons
@@ -28,7 +31,7 @@ router.post('/delivery-persons', asyncRoute(async (req, res, ok) => {
 // PUT /delivery-persons/:id
 router.put('/delivery-persons/:id', asyncRoute(async (req, res, ok, err) => {
   const db   = await connectToMongo()
-  const body = req.body; delete body._id
+  const body = req.body; delete body._id; delete body.id
   if (body.password) body.password = hashPwd(body.password)
   await db.collection('delivery_persons').updateOne({ id: req.params.id }, { $set: body })
   const dp = await db.collection('delivery_persons').findOne({ id: req.params.id })
@@ -45,23 +48,68 @@ router.delete('/delivery-persons/:id', asyncRoute(async (req, res, ok) => {
 }))
 
 // ── Decorator App (dp/*) ───────────────────────────────────────
+// Helper: make sure the authenticated decorator (req.dpId) is actually
+// assigned to the given order. Returns the order or sends 403/404 itself.
+async function assertDpOwnsOrder(db, orderId, dpId, res) {
+  const order = await db.collection('orders').findOne({ id: orderId })
+  if (!order) { res.status(404).json({ error: 'Order not found' }); return null }
+  const isAssigned =
+    (order.accepted_decorators || []).includes(dpId) ||
+    (order.assigned_decorators || []).includes(dpId) ||
+    order.delivery_person_id === dpId
+  if (!isAssigned) { res.status(403).json({ error: 'Not authorized for this order' }); return null }
+  return order
+}
 
-// POST /dp/login
+// POST /dp/login — issues JWT
 router.post('/dp/login', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
   const { phone, password } = req.body
   if (!phone) return err('Phone required')
-  const dp = await db.collection('delivery_persons').findOne({ phone })
+  const cleanPhone = String(phone).replace(/\D/g, '').slice(-10)
+  if (cleanPhone.length !== 10) return err('Enter a valid 10-digit phone number')
+  const dp = await db.collection('delivery_persons').findOne({
+    $or: [{ phone }, { phone: cleanPhone }]
+  })
   if (!dp) return err('Delivery person not found', 404)
   if (dp.password && password && dp.password !== hashPwd(password)) return err('Invalid password', 401)
+  if (dp.is_active === false) return err('Account is inactive. Contact support.', 403)
+  const token = await signToken({ dp_id: dp.id, role: 'decorator' })
+  const { _id, password: _, ...safe } = dp
+  return ok({ ...safe, token })
+}))
+
+// GET /dp/me — refresh current decorator profile (also doubles as "token still valid?")
+router.get('/dp/me', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const dp = await db.collection('delivery_persons').findOne({ id: req.dpId })
+  if (!dp) return err('Decorator not found', 404)
+  if (dp.is_active === false) return err('Account is inactive', 403)
   const { _id, password: _, ...safe } = dp
   return ok(safe)
 }))
 
+// POST /dp/change-password
+router.post('/dp/change-password', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const { current_password, new_password } = req.body
+  if (!current_password || !new_password) return err('current_password and new_password required')
+  if (String(new_password).length < 4) return err('New password must be at least 4 characters', 400)
+  const dp = await db.collection('delivery_persons').findOne({ id: req.dpId })
+  if (!dp) return err('Decorator not found', 404)
+  if (dp.password && dp.password !== hashPwd(current_password)) return err('Current password is incorrect', 401)
+  await db.collection('delivery_persons').updateOne(
+    { id: req.dpId },
+    { $set: { password: hashPwd(new_password), password_changed_at: new Date() } }
+  )
+  return ok({ success: true, message: 'Password updated successfully' })
+}))
+
 // GET /dp/dashboard/:id
-router.get('/dp/dashboard/:id', asyncRoute(async (req, res, ok, err) => {
+router.get('/dp/dashboard/:id', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db    = await connectToMongo()
-  const dpId  = req.params.id
+  const dpId  = req.dpId // from JWT, ignore :id
+  if (req.params.id !== dpId) return err('Forbidden', 403)
   const today = new Date().toISOString().split('T')[0]
   const dp    = await db.collection('delivery_persons').findOne({ id: dpId })
   if (!dp) return err('Delivery person not found', 404)
@@ -76,10 +124,12 @@ router.get('/dp/dashboard/:id', asyncRoute(async (req, res, ok, err) => {
 }))
 
 // GET /dp/calendar/:id
-router.get('/dp/calendar/:id', asyncRoute(async (req, res, ok, err) => {
+router.get('/dp/calendar/:id', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db    = await connectToMongo()
-  const dpId  = req.params.id
+  const dpId  = req.dpId
+  if (req.params.id !== dpId) return err('Forbidden', 403)
   const month = req.query.month || new Date().toISOString().slice(0, 7)
+  if (!/^\d{4}-\d{2}$/.test(month)) return err('Invalid month format. Use YYYY-MM', 400)
   const dp    = await db.collection('delivery_persons').findOne({ id: dpId })
   if (!dp) return err('Delivery person not found', 404)
   const orders = await db.collection('orders').find({ $or: [{ accepted_decorators: dpId }, { delivery_person_id: dpId }], 'delivery_slot.date': { $regex: `^${month}` } }).sort({ 'delivery_slot.date': 1, 'delivery_slot.hour': 1 }).toArray()
@@ -87,9 +137,10 @@ router.get('/dp/calendar/:id', asyncRoute(async (req, res, ok, err) => {
 }))
 
 // GET /dp/orders/:id
-router.get('/dp/orders/:id', asyncRoute(async (req, res, ok) => {
+router.get('/dp/orders/:id', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db    = await connectToMongo()
-  const dpId  = req.params.id
+  const dpId  = req.dpId
+  if (req.params.id !== dpId) return err('Forbidden', 403)
   const query = { $or: [{ accepted_decorators: dpId }, { delivery_person_id: dpId }] }
   if (req.query.status) query.delivery_status = req.query.status
   const orders = await db.collection('orders').find(query).sort({ created_at: -1 }).toArray()
@@ -97,97 +148,175 @@ router.get('/dp/orders/:id', asyncRoute(async (req, res, ok) => {
 }))
 
 // POST /dp/generate-otp
-router.post('/dp/generate-otp', asyncRoute(async (req, res, ok, err) => {
+router.post('/dp/generate-otp', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
+  const dpId = req.dpId
   const { order_id } = req.body
   if (!order_id) return err('order_id required')
-  const otp = String(Math.floor(1000 + Math.random() * 9000))
-  await db.collection('orders').updateOne({ id: order_id }, { $set: { verification_otp: otp, otp_generated_at: new Date() } })
-  return ok({ otp, order_id })
+  const order = await assertDpOwnsOrder(db, order_id, dpId, res)
+  if (!order) return
+  // 6-digit OTP (upgraded from 4-digit; still accepted but harder to brute-force)
+  const otp = String(Math.floor(100000 + Math.random() * 900000))
+  await db.collection('orders').updateOne(
+    { id: order_id },
+    { $set: { verification_otp: otp, otp_generated_at: new Date() } }
+  )
+  // Notify customer with their OTP via WhatsApp
+  const customer = await db.collection('users').findOne({ id: order.user_id })
+  if (customer?.phone) {
+    await sendWhatsApp(customer.phone, `FatafatDecor: Your decorator verification OTP is ${otp}. Share this ONLY with your decorator when they arrive. -FatafatDecor`)
+  }
+  return ok({ success: true, order_id })
 }))
 
-// POST /dp/face-scan
-router.post('/dp/face-scan', asyncRoute(async (req, res, ok, err) => {
+// POST /dp/selfie-proof — (formerly "face-scan"; now just a check-in photo)
+// This is NOT biometric verification — it is a selfie proof that the decorator
+// is physically at the customer's location, uploaded for record/audit purposes.
+router.post('/dp/selfie-proof', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { order_id, dp_id, face_image } = req.body
-  if (!order_id || !dp_id || !face_image) return err('order_id, dp_id, face_image required')
-  const dp    = await db.collection('delivery_persons').findOne({ id: dp_id })
-  if (!dp) return err('Delivery person not found', 404)
-  const order = await db.collection('orders').findOne({ id: order_id })
-  if (!order) return err('Order not found', 404)
-  const isAssigned = (order.accepted_decorators || []).includes(dp_id) || order.delivery_person_id === dp_id
-  if (!isAssigned) return err('Not authorized for this order', 403)
-  await db.collection('orders').updateOne({ id: order_id }, { $set: { face_scan: { dp_id, dp_name: dp.name, image: face_image, scanned_at: new Date() }, delivery_status: 'arrived' } })
+  const dpId = req.dpId
+  const { order_id, selfie_image, face_image, lat, lng } = req.body
+  const image = selfie_image || face_image // accept both keys for backward compat
+  if (!order_id || !image) return err('order_id and selfie_image required')
+  const dp = await db.collection('delivery_persons').findOne({ id: dpId })
+  if (!dp) return err('Decorator not found', 404)
+  const order = await assertDpOwnsOrder(db, order_id, dpId, res)
+  if (!order) return
+  await db.collection('orders').updateOne(
+    { id: order_id },
+    { $set: {
+        selfie_proof: {
+          dp_id: dpId,
+          dp_name: dp.name,
+          image,
+          location: (lat && lng) ? { lat, lng } : null,
+          captured_at: new Date()
+        },
+        // keep `face_scan` key populated too, so old clients still see "done"
+        face_scan: { dp_id: dpId, dp_name: dp.name, image, scanned_at: new Date() },
+        delivery_status: 'arrived',
+        arrived_at: new Date()
+    } }
+  )
+  return ok({ success: true, dp_name: dp.name })
+}))
+
+// POST /dp/face-scan — legacy alias, forwards to selfie-proof behavior
+router.post('/dp/face-scan', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const dpId = req.dpId
+  const { order_id, face_image } = req.body
+  if (!order_id || !face_image) return err('order_id and face_image required')
+  const dp = await db.collection('delivery_persons').findOne({ id: dpId })
+  if (!dp) return err('Decorator not found', 404)
+  const order = await assertDpOwnsOrder(db, order_id, dpId, res)
+  if (!order) return
+  await db.collection('orders').updateOne(
+    { id: order_id },
+    { $set: {
+        selfie_proof: { dp_id: dpId, dp_name: dp.name, image: face_image, captured_at: new Date() },
+        face_scan:    { dp_id: dpId, dp_name: dp.name, image: face_image, scanned_at: new Date() },
+        delivery_status: 'arrived',
+        arrived_at: new Date()
+    } }
+  )
   return ok({ success: true, dp_name: dp.name })
 }))
 
 // POST /dp/verify-otp
-router.post('/dp/verify-otp', asyncRoute(async (req, res, ok, err) => {
+router.post('/dp/verify-otp', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { order_id, otp, dp_id } = req.body
-  if (!order_id || !otp || !dp_id) return err('order_id, otp, dp_id required')
-  const order = await db.collection('orders').findOne({ id: order_id })
-  if (!order) return err('Order not found', 404)
-  const isAssigned = (order.accepted_decorators || []).includes(dp_id) || order.delivery_person_id === dp_id
-  if (!isAssigned) return err('Not authorized for this order', 403)
+  const dpId = req.dpId
+  const { order_id, otp } = req.body
+  if (!order_id || !otp) return err('order_id and otp required')
+  const order = await assertDpOwnsOrder(db, order_id, dpId, res)
+  if (!order) return
   if (!order.verification_otp) return err('OTP not yet generated', 400)
+  // Rate limit: max 5 wrong attempts within 10 minutes per order
+  const attempts  = order.otp_attempts || 0
+  const firstTry  = order.otp_first_attempt_at ? new Date(order.otp_first_attempt_at).getTime() : 0
+  const withinTen = firstTry && (Date.now() - firstTry) < 10 * 60 * 1000
+  if (attempts >= 5 && withinTen) return err('Too many attempts. Try again in 10 minutes.', 429)
   const expected = Buffer.from(String(order.verification_otp))
   const actual   = Buffer.from(String(otp))
-  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) return err('Invalid OTP', 401)
+  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+    await db.collection('orders').updateOne(
+      { id: order_id },
+      { $inc: { otp_attempts: 1 }, $set: { otp_first_attempt_at: order.otp_first_attempt_at || new Date() } }
+    )
+    return err('Invalid OTP', 401)
+  }
   const startTime = new Date()
-  await db.collection('orders').updateOne({ id: order_id }, { $set: { delivery_status: 'decorating', decoration_started_at: startTime, otp_verified: true } })
+  await db.collection('orders').updateOne(
+    { id: order_id },
+    { $set: { delivery_status: 'decorating', decoration_started_at: startTime, otp_verified: true },
+      $unset: { otp_attempts: '', otp_first_attempt_at: '' } }
+  )
   return ok({ success: true, started_at: startTime })
 }))
 
 // POST /dp/complete
-router.post('/dp/complete', asyncRoute(async (req, res, ok, err) => {
+router.post('/dp/complete', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { order_id, dp_id } = req.body
-  if (!order_id || !dp_id) return err('order_id, dp_id required')
-  const order = await db.collection('orders').findOne({ id: order_id })
-  if (!order) return err('Order not found', 404)
-  const isAssigned = (order.accepted_decorators || []).includes(dp_id) || order.delivery_person_id === dp_id
-  if (!isAssigned) return err('Not authorized for this order', 403)
+  const dpId = req.dpId
+  const { order_id } = req.body
+  if (!order_id) return err('order_id required')
+  const order = await assertDpOwnsOrder(db, order_id, dpId, res)
+  if (!order) return
   const completedAt = new Date()
-  await db.collection('orders').updateOne({ id: order_id }, { $set: { delivery_status: 'delivered', decoration_completed_at: completedAt } })
-  await db.collection('delivery_persons').updateOne({ id: dp_id }, { $inc: { total_deliveries: 1 } })
+  await db.collection('orders').updateOne(
+    { id: order_id },
+    { $set: { delivery_status: 'delivered', decoration_completed_at: completedAt } }
+  )
+  await db.collection('delivery_persons').updateOne({ id: dpId }, { $inc: { total_deliveries: 1 } })
   const doneUser = await db.collection('users').findOne({ id: order.user_id })
   if (doneUser?.phone) await sendWhatsApp(doneUser.phone, `FatafatDecor: Your decoration is complete! We hope you love it. Enjoy your celebration! Thank you for choosing FatafatDecor. -FatafatDecor`)
   return ok({ success: true, completed_at: completedAt })
 }))
 
 // POST /dp/collect-payment
-router.post('/dp/collect-payment', asyncRoute(async (req, res, ok, err) => {
+router.post('/dp/collect-payment', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { order_id, dp_id, amount, method: payMethod, notes } = req.body
-  if (!order_id || !dp_id || !amount) return err('order_id, dp_id, amount required')
-  const order = await db.collection('orders').findOne({ id: order_id })
-  if (!order) return err('Order not found', 404)
-  const isAssigned = (order.accepted_decorators || []).includes(dp_id) || order.delivery_person_id === dp_id
-  if (!isAssigned) return err('Not authorized for this order', 403)
-  const collection = { id: uuidv4(), order_id, dp_id, amount: Number(amount), method: payMethod || 'cash', notes: notes || '', deposited: false, created_at: new Date() }
+  const dpId = req.dpId
+  const { order_id, amount, method: payMethod, notes } = req.body
+  if (!order_id || amount === undefined) return err('order_id and amount required')
+  const amt = Number(amount)
+  if (!Number.isFinite(amt) || amt <= 0) return err('Invalid amount', 400)
+  const order = await assertDpOwnsOrder(db, order_id, dpId, res)
+  if (!order) return
+  const collection = { id: uuidv4(), order_id, dp_id: dpId, amount: amt, method: payMethod || 'cash', notes: notes || '', deposited: false, created_at: new Date() }
   await db.collection('dp_collections').insertOne(collection)
-  await db.collection('orders').updateOne({ id: order_id }, { $set: { payment_status: 'full', remaining_collected: true, collection_method: payMethod || 'cash' } })
+  await db.collection('orders').updateOne(
+    { id: order_id },
+    { $set: { payment_status: 'full', remaining_collected: true, collection_method: payMethod || 'cash' } }
+  )
   const { _id, ...clean } = collection
   return ok(clean)
 }))
 
 // POST /dp/deposit-cash
-router.post('/dp/deposit-cash', asyncRoute(async (req, res, ok, err) => {
+router.post('/dp/deposit-cash', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { dp_id, amount, deposit_method, reference_number } = req.body
-  if (!dp_id || !amount) return err('dp_id, amount required')
-  const deposit = { id: uuidv4(), dp_id, amount: Number(amount), deposit_method: deposit_method || 'office_cash', reference_number: reference_number || '', created_at: new Date() }
+  const dpId = req.dpId
+  const { amount, deposit_method, reference_number } = req.body
+  if (amount === undefined) return err('amount required')
+  const amt = Number(amount)
+  if (!Number.isFinite(amt) || amt <= 0) return err('Invalid amount', 400)
+  const deposit = { id: uuidv4(), dp_id: dpId, amount: amt, deposit_method: deposit_method || 'office_cash', reference_number: reference_number || '', created_at: new Date() }
   await db.collection('dp_deposits').insertOne(deposit)
-  await db.collection('dp_collections').updateMany({ dp_id, deposited: false, method: 'cash' }, { $set: { deposited: true, deposit_id: deposit.id } })
+  await db.collection('dp_collections').updateMany(
+    { dp_id: dpId, deposited: false, method: 'cash' },
+    { $set: { deposited: true, deposit_id: deposit.id } }
+  )
   const { _id, ...clean } = deposit
   return ok(clean)
 }))
 
 // GET /dp/earnings/:id
-router.get('/dp/earnings/:id', asyncRoute(async (req, res, ok) => {
-  const db          = await connectToMongo()
-  const dpId        = req.params.id
+router.get('/dp/earnings/:id', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db   = await connectToMongo()
+  const dpId = req.dpId
+  if (req.params.id !== dpId) return err('Forbidden', 403)
   const [collections, deposits] = await Promise.all([
     db.collection('dp_collections').find({ dp_id: dpId }).sort({ created_at: -1 }).toArray(),
     db.collection('dp_deposits').find({ dp_id: dpId }).sort({ created_at: -1 }).toArray(),
@@ -199,14 +328,15 @@ router.get('/dp/earnings/:id', asyncRoute(async (req, res, ok) => {
 }))
 
 // POST /dp/update-status
-router.post('/dp/update-status', asyncRoute(async (req, res, ok, err) => {
+router.post('/dp/update-status', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { order_id, status, notes, dp_id } = req.body
-  if (!order_id || !status || !dp_id) return err('order_id, status, dp_id required')
-  const order = await db.collection('orders').findOne({ id: order_id })
-  if (!order) return err('Order not found', 404)
-  const isAssigned = (order.accepted_decorators || []).includes(dp_id) || order.delivery_person_id === dp_id
-  if (!isAssigned) return err('Not authorized for this order', 403)
+  const dpId = req.dpId
+  const { order_id, status, notes } = req.body
+  if (!order_id || !status) return err('order_id and status required')
+  const VALID = ['pending','assigned','en_route','arrived','decorating','delivered','cancelled']
+  if (!VALID.includes(status)) return err('Invalid status', 400)
+  const order = await assertDpOwnsOrder(db, order_id, dpId, res)
+  if (!order) return
   const update = { delivery_status: status }
   if (status === 'en_route') update.en_route_at = new Date()
   if (status === 'arrived')  update.arrived_at  = new Date()
@@ -226,10 +356,16 @@ router.post('/dp/update-status', asyncRoute(async (req, res, ok, err) => {
 }))
 
 // GET /dp/order-detail/:id
-router.get('/dp/order-detail/:id', asyncRoute(async (req, res, ok, err) => {
+router.get('/dp/order-detail/:id', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db     = await connectToMongo()
+  const dpId   = req.dpId
   const order  = await db.collection('orders').findOne({ id: req.params.id })
   if (!order) return err('Order not found', 404)
+  const isAssigned =
+    (order.accepted_decorators || []).includes(dpId) ||
+    (order.assigned_decorators || []).includes(dpId) ||
+    order.delivery_person_id === dpId
+  if (!isAssigned) return err('Not authorized for this order', 403)
   const user   = await db.collection('users').findOne({ id: order.user_id })
   const design = order.design_id ? await db.collection('designs').findOne({ id: order.design_id }) : null
   let kitInfo  = null
@@ -243,30 +379,35 @@ router.get('/dp/order-detail/:id', asyncRoute(async (req, res, ok, err) => {
 }))
 
 // POST /dp/accept-order
-router.post('/dp/accept-order', asyncRoute(async (req, res, ok, err) => {
+router.post('/dp/accept-order', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { order_id, dp_id } = req.body
-  if (!order_id || !dp_id) return err('order_id and dp_id required')
-  const dp    = await db.collection('delivery_persons').findOne({ id: dp_id })
-  if (!dp) return err('Delivery person not found', 404)
+  const dpId = req.dpId
+  const { order_id } = req.body
+  if (!order_id) return err('order_id required')
+  const dp    = await db.collection('delivery_persons').findOne({ id: dpId })
+  if (!dp) return err('Decorator not found', 404)
   const order = await db.collection('orders').findOne({ id: order_id })
   if (!order) return err('Order not found', 404)
-  if (!(order.assigned_decorators || []).includes(dp_id)) return err('Order not assigned to you', 403)
-  if ((order.accepted_decorators || []).includes(dp_id)) return err('You have already accepted this order')
-  const update = { $addToSet: { accepted_decorators: dp_id } }
-  if (!order.delivery_person_id) update.$set = { delivery_person_id: dp_id, delivery_status: 'assigned' }
+  if (!(order.assigned_decorators || []).includes(dpId)) return err('Order not assigned to you', 403)
+  if ((order.accepted_decorators || []).includes(dpId)) return err('You have already accepted this order')
+  const update = { $addToSet: { accepted_decorators: dpId } }
+  if (!order.delivery_person_id) update.$set = { delivery_person_id: dpId, delivery_status: 'assigned' }
   await db.collection('orders').updateOne({ id: order_id }, update)
   return ok({ success: true, message: 'Order accepted successfully' })
 }))
 
 // POST /dp/decline-order
-router.post('/dp/decline-order', asyncRoute(async (req, res, ok, err) => {
+router.post('/dp/decline-order', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { order_id, dp_id } = req.body
-  if (!order_id || !dp_id) return err('order_id and dp_id required')
+  const dpId = req.dpId
+  const { order_id } = req.body
+  if (!order_id) return err('order_id required')
   const order = await db.collection('orders').findOne({ id: order_id })
   if (!order) return err('Order not found', 404)
-  await db.collection('orders').updateOne({ id: order_id }, { $pull: { assigned_decorators: dp_id, accepted_decorators: dp_id } })
+  await db.collection('orders').updateOne(
+    { id: order_id },
+    { $pull: { assigned_decorators: dpId, accepted_decorators: dpId } }
+  )
   return ok({ success: true, message: 'Order declined' })
 }))
 

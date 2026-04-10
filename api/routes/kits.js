@@ -1,12 +1,13 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { connectToMongo } from '../db.js'
+import { requireAdmin } from '../jwt.js'
 import { asyncRoute } from '../helpers.js'
 import { AI_SERVICE_URL } from '../config.js'
 
 const router = Router()
 
-// GET /kits
+// GET /kits — public read
 router.get('/kits', asyncRoute(async (req, res, ok) => {
   const db    = await connectToMongo()
   const query = {}
@@ -15,7 +16,7 @@ router.get('/kits', asyncRoute(async (req, res, ok) => {
   return ok(kits.map(({ _id, ...k }) => k))
 }))
 
-// GET /kits/match
+// GET /kits/match — public read
 router.get('/kits/match', asyncRoute(async (req, res, ok) => {
   const db    = await connectToMongo()
   const query = { is_active: true }
@@ -25,15 +26,15 @@ router.get('/kits/match', asyncRoute(async (req, res, ok) => {
   return ok(kits.map(({ _id, ...k }) => k))
 }))
 
-// GET /kits/reference-images
+// GET /kits/reference-images — public read (no base64 returned)
 router.get('/kits/reference-images', asyncRoute(async (req, res, ok) => {
   const db   = await connectToMongo()
   const refs = await db.collection('reference_images').find({}).sort({ created_at: -1 }).toArray()
   return ok(refs.map(({ _id, image_base64, ...r }) => ({ ...r, has_image: !!image_base64 })))
 }))
 
-// POST /kits/reference-images
-router.post('/kits/reference-images', asyncRoute(async (req, res, ok, err) => {
+// POST /kits/reference-images — admin only
+router.post('/kits/reference-images', requireAdmin, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
   const { name, image_base64, tags, occasion, description } = req.body
   if (!name || !image_base64) return err('name and image_base64 required')
@@ -43,15 +44,15 @@ router.post('/kits/reference-images', asyncRoute(async (req, res, ok, err) => {
   return ok(clean)
 }))
 
-// DELETE /kits/reference-images/:id
-router.delete('/kits/reference-images/:id', asyncRoute(async (req, res, ok) => {
+// DELETE /kits/reference-images/:id — admin only
+router.delete('/kits/reference-images/:id', requireAdmin, asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   await db.collection('reference_images').deleteOne({ id: req.params.id })
   return ok({ success: true })
 }))
 
-// POST /kits/analyze
-router.post('/kits/analyze', asyncRoute(async (req, res, ok, err) => {
+// POST /kits/analyze — admin only
+router.post('/kits/analyze', requireAdmin, asyncRoute(async (req, res, ok, err) => {
   const { image_base64, name } = req.body
   if (!image_base64) return err('image_base64 required')
   const controller = new AbortController()
@@ -64,7 +65,7 @@ router.post('/kits/analyze', asyncRoute(async (req, res, ok, err) => {
   return ok(await aiRes.json())
 }))
 
-// GET /kits/:id
+// GET /kits/:id — public read
 router.get('/kits/:id', asyncRoute(async (req, res, ok, err) => {
   const db  = await connectToMongo()
   const kit = await db.collection('decoration_kits').findOne({ id: req.params.id })
@@ -73,8 +74,8 @@ router.get('/kits/:id', asyncRoute(async (req, res, ok, err) => {
   return ok(clean)
 }))
 
-// POST /kits
-router.post('/kits', asyncRoute(async (req, res, ok, err) => {
+// POST /kits — admin only
+router.post('/kits', requireAdmin, asyncRoute(async (req, res, ok, err) => {
   const db   = await connectToMongo()
   const body = req.body
   if (!body.name) return err('Kit name required')
@@ -101,8 +102,8 @@ router.post('/kits', asyncRoute(async (req, res, ok, err) => {
   return ok(clean)
 }))
 
-// PUT /kits/:id
-router.put('/kits/:id', asyncRoute(async (req, res, ok, err) => {
+// PUT /kits/:id — admin only
+router.put('/kits/:id', requireAdmin, asyncRoute(async (req, res, ok, err) => {
   const db   = await connectToMongo()
   const body = req.body; delete body._id; body.updated_at = new Date()
   await db.collection('decoration_kits').updateOne({ id: req.params.id }, { $set: body })
@@ -112,8 +113,8 @@ router.put('/kits/:id', asyncRoute(async (req, res, ok, err) => {
   return ok(clean)
 }))
 
-// DELETE /kits/:id
-router.delete('/kits/:id', asyncRoute(async (req, res, ok) => {
+// DELETE /kits/:id — admin only
+router.delete('/kits/:id', requireAdmin, asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   await db.collection('decoration_kits').deleteOne({ id: req.params.id })
   return ok({ success: true })

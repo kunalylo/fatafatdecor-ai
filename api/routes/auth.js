@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
-import { signToken, getUserIdFromRequest } from '../jwt.js'
+import { signToken } from '../jwt.js'
 import { hashPwd, hashOtp, sendOtpSms, asyncRoute } from '../helpers.js'
 
 const router = Router()

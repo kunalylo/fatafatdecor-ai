@@ -1,11 +1,12 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { connectToMongo } from '../db.js'
+import { requireAdmin } from '../jwt.js'
 import { asyncRoute } from '../helpers.js'
 
 const router = Router()
 
-// GET /items
+// GET /items — public read
 router.get('/items', asyncRoute(async (req, res, ok) => {
   const db       = await connectToMongo()
   const query    = {}
@@ -14,8 +15,8 @@ router.get('/items', asyncRoute(async (req, res, ok) => {
   return ok(items.map(({ _id, ...item }) => item))
 }))
 
-// POST /items
-router.post('/items', asyncRoute(async (req, res, ok) => {
+// POST /items — admin only
+router.post('/items', requireAdmin, asyncRoute(async (req, res, ok) => {
   const db   = await connectToMongo()
   const body = req.body
   const item = {
@@ -37,8 +38,8 @@ router.post('/items', asyncRoute(async (req, res, ok) => {
   return ok(clean)
 }))
 
-// PUT /items/:id
-router.put('/items/:id', asyncRoute(async (req, res, ok, err) => {
+// PUT /items/:id — admin only
+router.put('/items/:id', requireAdmin, asyncRoute(async (req, res, ok, err) => {
   const db   = await connectToMongo()
   const body = req.body; delete body._id
   await db.collection('items').updateOne({ id: req.params.id }, { $set: body })
@@ -48,21 +49,21 @@ router.put('/items/:id', asyncRoute(async (req, res, ok, err) => {
   return ok(clean)
 }))
 
-// DELETE /items/:id
-router.delete('/items/:id', asyncRoute(async (req, res, ok) => {
+// DELETE /items/:id — admin only
+router.delete('/items/:id', requireAdmin, asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   await db.collection('items').deleteOne({ id: req.params.id })
   return ok({ success: true })
 }))
 
-// GET /rent-items
+// GET /rent-items — public read
 router.get('/rent-items', asyncRoute(async (req, res, ok) => {
   const db    = await connectToMongo()
   const items = await db.collection('rent_items').find({}).toArray()
   return ok(items.map(({ _id, ...i }) => i))
 }))
 
-// GET /gifts
+// GET /gifts — public read
 router.get('/gifts', asyncRoute(async (req, res, ok) => {
   const db    = await connectToMongo()
   const gifts = await db.collection('gifts').find({ $or: [{ active: true }, { is_active: true }] }).sort({ sr: 1, name: 1 }).toArray()
