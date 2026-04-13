@@ -130,4 +130,58 @@ router.put('/orders/:id', asyncRoute(async (req, res, ok, err) => {
   return ok(clean)
 }))
 
+// ── Admin Gifts CRUD ──────────────────────────────────────────
+
+// GET /admin/gifts — all gifts (including inactive)
+router.get('/admin/gifts', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  const gifts = await db.collection('gifts').find({}).sort({ sr: 1, name: 1 }).toArray()
+  return ok(gifts.map(({ _id, ...g }) => g))
+}))
+
+// POST /admin/gifts — create gift
+router.post('/admin/gifts', asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const { name, description, price, image_url, sr } = req.body
+  if (!name) return err('Gift name required')
+  const gift = {
+    id: uuidv4(), name, description: description || '',
+    price: Number(price) || 0, image_url: image_url || '',
+    sr: Number(sr) || 0, active: true, is_active: true,
+    created_at: new Date()
+  }
+  await db.collection('gifts').insertOne(gift)
+  const { _id, ...clean } = gift
+  return ok(clean)
+}))
+
+// PUT /admin/gifts/:id — update gift
+router.put('/admin/gifts/:id', asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const body = req.body; delete body._id
+  if (body.price !== undefined) body.price = Number(body.price)
+  if (body.sr !== undefined) body.sr = Number(body.sr)
+  if (body.active !== undefined) body.is_active = body.active
+  body.updated_at = new Date()
+  await db.collection('gifts').updateOne({ id: req.params.id }, { $set: body })
+  const gift = await db.collection('gifts').findOne({ id: req.params.id })
+  if (!gift) return err('Gift not found', 404)
+  const { _id, ...clean } = gift
+  return ok(clean)
+}))
+
+// DELETE /admin/gifts/:id — delete gift
+router.delete('/admin/gifts/:id', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  await db.collection('gifts').deleteOne({ id: req.params.id })
+  return ok({ success: true })
+}))
+
+// GET /admin/gift-orders — all gift orders
+router.get('/admin/gift-orders', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  const orders = await db.collection('gift_orders').find({}).sort({ created_at: -1 }).toArray()
+  return ok(orders.map(({ _id, ...o }) => o))
+}))
+
 export default router
