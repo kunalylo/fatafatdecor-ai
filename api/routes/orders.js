@@ -18,11 +18,19 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
   if (!design) return err('Design not found', 404)
   if (design.user_id && design.user_id !== user_id) return err('Design does not belong to this user', 403)
 
+  // Reuse existing unpaid order for same design (prevents duplicates on payment retry)
+  const existingOrder = await db.collection('orders').findOne({ design_id, user_id, payment_status: 'pending' })
+  if (existingOrder) {
+    const { _id, ...cleanExisting } = existingOrder
+    return ok(cleanExisting)
+  }
+
+  // Validate total_override — allow down to 10% (user may remove most addon items)
   let finalTotal = design.total_cost
   if (total_override) {
     const overrideNum = Math.round(Number(total_override))
-    const minAllowed  = Math.round(design.total_cost * 0.5)
-    if (overrideNum < minAllowed || overrideNum > design.total_cost) return err('Invalid total override amount', 400)
+    const minAllowed  = Math.round(design.total_cost * 0.1)
+    if (overrideNum < minAllowed || overrideNum > design.total_cost * 1.5) return err('Invalid total override amount', 400)
     finalTotal = overrideNum
   }
 
@@ -30,9 +38,12 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
   const computedGiftTotal  = hasGifts ? gift_items.reduce((s, g) => s + (Number(g.price) || 0) * (Number(g.quantity) || 1), 0) : 0
   const orderTotal         = finalTotal + computedGiftTotal
 
+  // Use items_override from client if user removed addon items, otherwise fall back to design items
+  const orderItems = (Array.isArray(body.items_override) && body.items_override.length > 0) ? body.items_override : (design.items_used || [])
+
   const order = {
     id: uuidv4(), user_id, design_id,
-    items: design.items_used || [],
+    items: orderItems,
     total_cost: orderTotal, payment_status: 'pending', payment_amount: 0,
     delivery_person_id: null, delivery_slot: null, delivery_status: 'pending',
     delivery_address: delivery_address || '', delivery_landmark: delivery_landmark || '',
@@ -57,7 +68,7 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
       if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor NEW ORDER #${order.id.slice(0, 8)}: ${order.delivery_address || 'Address not set'}. Amount: Rs.${order.total_cost}. Open your decorator app now to accept! -FatafatDecor`)
     }
   }
-  await db.collection('designs').updateOne({ id: design_id }, { $set: { status: 'ordered' } })
+  // NOTE: Design status stays 'generated' until payment succeeds (prevents stuck designs on payment failure)
   const orderUser = await db.collection('users').findOne({ id: user_id })
   if (orderUser?.phone) await sendWhatsApp(orderUser.phone, `FatafatDecor: Your decoration order has been placed successfully! Total: Rs.${order.total_cost}. Decorators are being assigned. -FatafatDecor`)
 

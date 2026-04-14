@@ -64,6 +64,11 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
       { id: payment.order_id },
       { $set: { payment_status: 'partial', payment_amount: payment.amount } }
     )
+    // Mark design as 'ordered' NOW that payment succeeded (not at order creation)
+    const paidOrder = await db.collection('orders').findOne({ id: payment.order_id })
+    if (paidOrder?.design_id) {
+      await db.collection('designs').updateOne({ id: paidOrder.design_id }, { $set: { status: 'ordered' } })
+    }
     const payUser = await db.collection('users').findOne({ id: payment.user_id })
     if (payUser?.phone) await sendWhatsApp(payUser.phone, `FatafatDecor: Payment of Rs.${payment.amount} received! Your booking is confirmed. Decorator will arrive at the selected time. -FatafatDecor`)
   }
