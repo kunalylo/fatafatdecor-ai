@@ -57,6 +57,7 @@ router.post('/gift-orders/:id/request-slot', requireUser, asyncRoute(async (req,
   const order = await db.collection('gift_orders').findOne({ id: req.params.id })
   if (!order) return err('Gift order not found', 404)
   if (order.user_id !== req.userId) return err('Not authorized', 403)
+  if (order.payment_status !== 'full') return err('Gift order must be paid before booking a slot', 402)
   await db.collection('gift_orders').updateOne({ id: req.params.id }, { $set: { requested_slot: { date, hour }, delivery_slot: { date, hour } } })
   return ok({ success: true })
 }))

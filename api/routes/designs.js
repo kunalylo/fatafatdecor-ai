@@ -50,9 +50,13 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
   if (!VALID_BUDGETS.some(([mn, mx]) => mn === bMin && mx === bMax)) return err('Invalid budget range', 400)
   const safeDescription = description ? String(description).slice(0, 200) : ''
 
-  const user = await db.collection('users').findOne({ id: user_id })
-  if (!user) return err('User not found', 404)
-  if (user.credits <= 0) return err('No credits remaining. Please purchase credits.', 402)
+  // ── Deduct credit atomically BEFORE AI call (prevents race condition) ────
+  const creditResult = await db.collection('users').findOneAndUpdate(
+    { id: user_id, credits: { $gt: 0 } },
+    { $inc: { credits: -1 } },
+    { returnDocument: 'after' }
+  )
+  if (!creditResult) return err('No credits remaining. Please purchase credits.', 402)
 
   const [allKits, allItems, allRentItems] = await Promise.all([
     db.collection('decoration_kits').find({ active: true }).toArray(),
@@ -110,7 +114,11 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
   } catch (aiErr) {
     console.warn('[designs/generate] smart-generate failed, using fallback:', aiErr.message)
     const isTimeout = aiErr.name === 'AbortError' || aiErr.message?.includes('aborted')
-    if (isTimeout) return err('AI generation timed out. Please try again.', 500)
+    if (isTimeout) {
+      // Refund credit on timeout
+      await db.collection('users').updateOne({ id: user_id }, { $inc: { credits: 1 } })
+      return err('AI generation timed out. Please try again.', 500)
+    }
 
     const occasionMap = { birthday:['birthday','Birthday'], anniversary:['anniversary','Anniversary'], wedding:['wedding','Wedding'], baby_shower:['Ceremony','baby_shower'], engagement:['Proposal','engagement'], party:['birthday','Birthday'], housewarming:['housewarming'], corporate:['corporate'], dinner:['anniversary','Anniversary'], festival:['Holi','festival'] }
     const tagVariants = occasionMap[occasion] || [occasion]
@@ -149,17 +157,15 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
       const uploaded = await uploadToImageKit(fbData.image_url, designId)
       decoratedImageUrl = uploaded || fbData.image_url
     } catch (fbErr) {
+      // Refund credit on fallback failure
+      await db.collection('users').updateOne({ id: user_id }, { $inc: { credits: 1 } })
       const isTo = fbErr.name === 'AbortError' || fbErr.message?.includes('aborted')
       return err(isTo ? 'AI generation timed out. Please try again.' : 'AI image generation failed. Please try again.', 500)
     }
   }
 
-  const creditResult = await db.collection('users').findOneAndUpdate(
-    { id: user_id, credits: { $gt: 0 } },
-    { $inc: { credits: -1 } },
-    { returnDocument: 'after' }
-  )
-  if (!creditResult) return err('No credits remaining. Please purchase credits.', 402)
+  // Credit was already deducted above — fetch updated count for response
+  const updatedUser = await db.collection('users').findOne({ id: user_id })
 
   const allSelectedItems = [...kitItems, ...addOnItems]
   const totalCost        = kitCost + addOnCost
@@ -177,7 +183,7 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
   }
   await db.collection('designs').insertOne(design)
   const { _id, ...cleanDesign } = design
-  return ok({ ...cleanDesign, remaining_credits: creditResult.credits, kit_used: !!selectedKit })
+  return ok({ ...cleanDesign, remaining_credits: updatedUser?.credits ?? 0, kit_used: !!selectedKit })
 }))
 
 // GET /designs — requires JWT, only returns own designs

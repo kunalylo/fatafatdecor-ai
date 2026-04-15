@@ -19,7 +19,7 @@ router.post('/auth/register', asyncRoute(async (req, res, ok, err) => {
   const user = {
     id: uuidv4(), name, email, phone: phone || '',
     password: hashPwd(password), role: role || 'user',
-    credits: 3, has_purchased_credits: false,
+    credits: 1, has_purchased_credits: false,
     location: null, city: req.body.city || null,
     auth_provider: 'email', created_at: new Date(),
   }
@@ -81,7 +81,7 @@ router.post('/auth/verify-signup-otp', asyncRoute(async (req, res, ok, err) => {
   const user = {
     id: uuidv4(), name: name || otpDoc?.name || 'User', email, phone,
     password: hashPwd(password), role: 'user',
-    credits: 3, has_purchased_credits: false,
+    credits: 1, has_purchased_credits: false,
     location: null, city: null, auth_provider: 'email', created_at: new Date(),
   }
   await db.collection('users').insertOne(user)
@@ -228,7 +228,7 @@ router.post('/auth/google', asyncRoute(async (req, res, ok, err) => {
     user = {
       id: uuidv4(), name: name || email.split('@')[0], email,
       phone: '', password: null, role: 'user',
-      credits: 3, has_purchased_credits: false,
+      credits: 1, has_purchased_credits: false,
       location: null, city: city || null,
       google_id, photo_url: photo_url || null,
       auth_provider: 'google', created_at: new Date(),
@@ -253,6 +253,8 @@ router.post('/auth/delete-account', asyncRoute(async (req, res, ok, err) => {
   await db.collection('users').deleteOne({ id: user.id })
   await db.collection('orders').deleteMany({ user_id: user.id })
   await db.collection('designs').deleteMany({ user_id: user.id })
+  await db.collection('gift_orders').deleteMany({ user_id: user.id })
+  await db.collection('payments').deleteMany({ user_id: user.id })
   const clean = user.phone?.replace(/\D/g, '').slice(-10)
   if (clean) {
     await db.collection('signup_otps').deleteMany({ phone: { $in: [user.phone, clean] } })

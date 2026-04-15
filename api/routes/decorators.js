@@ -337,6 +337,14 @@ router.post('/dp/update-status', requireDp, asyncRoute(async (req, res, ok, err)
   if (!VALID.includes(status)) return err('Invalid status', 400)
   const order = await assertDpOwnsOrder(db, order_id, dpId, res)
   if (!order) return
+  // Enforce valid status transitions
+  const TRANSITIONS = {
+    pending: ['assigned','cancelled'], assigned: ['en_route','cancelled'],
+    en_route: ['arrived','cancelled'], arrived: ['decorating','cancelled'],
+    decorating: ['delivered'], delivered: [], cancelled: [],
+  }
+  const allowed = TRANSITIONS[order.delivery_status || 'pending'] || []
+  if (!allowed.includes(status)) return err(`Cannot move from "${order.delivery_status || 'pending'}" to "${status}"`, 400)
   const update = { delivery_status: status }
   if (status === 'en_route') update.en_route_at = new Date()
   if (status === 'arrived')  update.arrived_at  = new Date()

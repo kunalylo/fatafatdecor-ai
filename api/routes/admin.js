@@ -1,9 +1,13 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { connectToMongo } from '../db.js'
+import { requireAdmin } from '../jwt.js'
 import { hashPwd, asyncRoute } from '../helpers.js'
 
 const router = Router()
+
+// All admin routes require admin JWT
+router.use(requireAdmin)
 
 // POST /admin/block-slot
 router.post('/admin/block-slot', asyncRoute(async (req, res, ok, err) => {
@@ -101,6 +105,8 @@ router.delete('/admin/users/:id', asyncRoute(async (req, res, ok) => {
   await db.collection('users').deleteOne({ id: req.params.id })
   await db.collection('orders').deleteMany({ user_id: req.params.id })
   await db.collection('designs').deleteMany({ user_id: req.params.id })
+  await db.collection('gift_orders').deleteMany({ user_id: req.params.id })
+  await db.collection('payments').deleteMany({ user_id: req.params.id })
   return ok({ success: true })
 }))
 

@@ -17,6 +17,13 @@ router.post('/payments/create-order', requireUser, asyncRoute(async (req, res, o
   if (!type || !amount) return err('type and amount required')
   const amt = Number(amount)
   if (!Number.isFinite(amt) || amt <= 0) return err('Invalid payment amount', 400)
+  if (amt > 100000) return err('Payment amount exceeds limit', 400)
+
+  // Validate credits_count for credit purchases
+  if (type === 'credits') {
+    const cc = Number(credits_count)
+    if (!Number.isInteger(cc) || cc <= 0 || cc > 50) return err('Invalid credits count', 400)
+  }
 
   // If paying for a specific order, verify it belongs to this user
   if (order_id) {
@@ -69,10 +76,15 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
     if (paidOrder?.design_id) {
       await db.collection('designs').updateOne({ id: paidOrder.design_id }, { $set: { status: 'ordered' } })
     }
+    // Reward: +1 credit for booking a design
+    await db.collection('users').updateOne({ id: payment.user_id }, { $inc: { credits: 1 } })
     const payUser = await db.collection('users').findOne({ id: payment.user_id })
-    if (payUser?.phone) await sendWhatsApp(payUser.phone, `FatafatDecor: Payment of Rs.${payment.amount} received! Your booking is confirmed. Decorator will arrive at the selected time. -FatafatDecor`)
+    if (payUser?.phone) await sendWhatsApp(payUser.phone, `FatafatDecor: Payment of Rs.${payment.amount} received! Your booking is confirmed. You earned +1 free credit! Decorator will arrive at the selected time. -FatafatDecor`)
   }
   if (payment.type === 'gift_delivery' && payment.order_id) {
+    // Validate payment amount covers the gift order total
+    const giftOrder = await db.collection('gift_orders').findOne({ id: payment.order_id })
+    if (giftOrder && payment.amount < giftOrder.gift_total) return err('Payment amount less than gift order total', 400)
     await db.collection('gift_orders').updateOne(
       { id: payment.order_id },
       { $set: { payment_status: 'full', payment_amount: payment.amount } }

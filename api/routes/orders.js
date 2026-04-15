@@ -51,7 +51,7 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
     delivery_lat: delivery_lat || null, delivery_lng: delivery_lng || null,
     assigned_decorators: [], accepted_decorators: [],
     has_gifts: hasGifts, gift_items: hasGifts ? gift_items : [],
-    gift_total: hasGifts ? (gift_total !== undefined ? Number(gift_total) : computedGiftTotal) : 0,
+    gift_total: hasGifts ? computedGiftTotal : 0,
     created_at: new Date(),
   }
   await db.collection('orders').insertOne(order)
