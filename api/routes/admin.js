@@ -6,8 +6,8 @@ import { hashPwd, asyncRoute } from '../helpers.js'
 
 const router = Router()
 
-// All admin routes require admin JWT
-router.use(requireAdmin)
+// All admin routes require admin JWT (scoped to /admin/* paths only)
+router.use('/admin', requireAdmin)
 
 // POST /admin/block-slot
 router.post('/admin/block-slot', asyncRoute(async (req, res, ok, err) => {
