@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
 import { hashPwd, sendWhatsApp, asyncRoute } from '../helpers.js'
-import { signToken, requireDp } from '../jwt.js'
+import { signToken, requireDp, requireAdmin } from '../jwt.js'
 
 const router = Router()
 
@@ -11,15 +11,15 @@ const router = Router()
 // Note: these endpoints are meant for admin use. Do NOT mount them on public paths
 // without an admin check in the parent router.
 
-// GET /delivery-persons
-router.get('/delivery-persons', asyncRoute(async (req, res, ok) => {
+// GET /delivery-persons — admin only
+router.get('/delivery-persons', requireAdmin, asyncRoute(async (req, res, ok) => {
   const db  = await connectToMongo()
   const dps = await db.collection('delivery_persons').find({}).toArray()
   return ok(dps.map(({ _id, password: _, ...dp }) => dp))
 }))
 
-// POST /delivery-persons
-router.post('/delivery-persons', asyncRoute(async (req, res, ok) => {
+// POST /delivery-persons — admin only
+router.post('/delivery-persons', requireAdmin, asyncRoute(async (req, res, ok) => {
   const db   = await connectToMongo()
   const body = req.body
   const dp   = { id: uuidv4(), name: body.name, phone: body.phone || '', password: hashPwd(body.password || '1234'), is_active: true, current_location: null, schedule: {}, rating: 5.0, total_deliveries: 0, created_at: new Date() }
@@ -28,8 +28,8 @@ router.post('/delivery-persons', asyncRoute(async (req, res, ok) => {
   return ok(clean)
 }))
 
-// PUT /delivery-persons/:id
-router.put('/delivery-persons/:id', asyncRoute(async (req, res, ok, err) => {
+// PUT /delivery-persons/:id — admin only
+router.put('/delivery-persons/:id', requireAdmin, asyncRoute(async (req, res, ok, err) => {
   const db   = await connectToMongo()
   const body = req.body; delete body._id; delete body.id
   if (body.password) body.password = hashPwd(body.password)
@@ -40,8 +40,8 @@ router.put('/delivery-persons/:id', asyncRoute(async (req, res, ok, err) => {
   return ok(clean)
 }))
 
-// DELETE /delivery-persons/:id
-router.delete('/delivery-persons/:id', asyncRoute(async (req, res, ok) => {
+// DELETE /delivery-persons/:id — admin only
+router.delete('/delivery-persons/:id', requireAdmin, asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   await db.collection('delivery_persons').deleteOne({ id: req.params.id })
   return ok({ success: true })

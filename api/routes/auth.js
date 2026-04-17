@@ -10,7 +10,7 @@ const router = Router()
 // POST /auth/register
 router.post('/auth/register', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { name, email, phone, password, role } = req.body
+  const { name, email, phone, password } = req.body
   if (!name || !email || !password) return err('Name, email, password required')
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err('Invalid email format')
   if (password.length < 6) return err('Password must be at least 6 characters')
@@ -18,7 +18,7 @@ router.post('/auth/register', asyncRoute(async (req, res, ok, err) => {
   if (existing) return err('Email already registered')
   const user = {
     id: uuidv4(), name, email, phone: phone || '',
-    password: hashPwd(password), role: role || 'user',
+    password: hashPwd(password), role: 'user',
     credits: 1, has_purchased_credits: false,
     location: null, city: req.body.city || null,
     auth_provider: 'email', created_at: new Date(),
@@ -246,10 +246,17 @@ router.post('/auth/google', asyncRoute(async (req, res, ok, err) => {
 // POST /auth/delete-account
 router.post('/auth/delete-account', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { email, password } = req.body
-  if (!email || !password) return err('Email and password required')
-  const user = await db.collection('users').findOne({ email, password: hashPwd(password) })
-  if (!user) return err('Invalid email or password', 401)
+  const { email, password, google_id } = req.body
+  if (!email) return err('Email required')
+  let user
+  if (google_id) {
+    // Google-only accounts have no password — verify via google_id
+    user = await db.collection('users').findOne({ email, google_id })
+  } else {
+    if (!password) return err('Email and password required')
+    user = await db.collection('users').findOne({ email, password: hashPwd(password) })
+  }
+  if (!user) return err('Invalid credentials', 401)
   await db.collection('users').deleteOne({ id: user.id })
   await db.collection('orders').deleteMany({ user_id: user.id })
   await db.collection('designs').deleteMany({ user_id: user.id })
