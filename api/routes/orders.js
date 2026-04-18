@@ -45,7 +45,7 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
     id: uuidv4(), user_id, design_id,
     items: orderItems,
     total_cost: orderTotal, payment_status: 'pending', payment_amount: 0,
-    delivery_person_id: null, delivery_slot: null, delivery_status: 'pending',
+    delivery_person_id: null, delivery_slot: null, delivery_status: 'awaiting_payment',
     delivery_address: delivery_address || '', delivery_landmark: delivery_landmark || '',
     delivery_location: { lat: delivery_lat || null, lng: delivery_lng || null },
     delivery_lat: delivery_lat || null, delivery_lng: delivery_lng || null,
@@ -55,22 +55,8 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
     created_at: new Date(),
   }
   await db.collection('orders').insertOne(order)
-
-  // Assign all active decorators and notify them
-  const availablePersons = await db.collection('delivery_persons').find({ is_active: true }).toArray()
-  if (availablePersons.length > 0) {
-    const assignedIds  = availablePersons.map(p => p.id)
-    const assignedInfo = availablePersons.map(p => ({ id: p.id, name: p.name, phone: p.phone }))
-    await db.collection('orders').updateOne({ id: order.id }, { $set: { assigned_decorators: assignedIds, assigned_decorators_info: assignedInfo } })
-    order.assigned_decorators      = assignedIds
-    order.assigned_decorators_info = assignedInfo
-    for (const dp of availablePersons) {
-      if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor NEW ORDER #${order.id.slice(0, 8)}: ${order.delivery_address || 'Address not set'}. Amount: Rs.${order.total_cost}. Open your decorator app now to accept! -FatafatDecor`)
-    }
-  }
-  // NOTE: Design status stays 'generated' until payment succeeds (prevents stuck designs on payment failure)
-  const orderUser = await db.collection('users').findOne({ id: user_id })
-  if (orderUser?.phone) await sendWhatsApp(orderUser.phone, `FatafatDecor: Your decoration order has been placed successfully! Total: Rs.${order.total_cost}. Decorators are being assigned. -FatafatDecor`)
+  // Decorators are assigned + notified only after payment verification (/payments/verify).
+  // This prevents spurious requests when the user backs out or payment fails.
 
   const { _id, ...clean } = order
   return ok(clean)

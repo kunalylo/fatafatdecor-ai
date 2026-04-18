@@ -18,16 +18,12 @@ router.post('/gift-orders', requireUser, asyncRoute(async (req, res, ok, err) =>
     delivery_address: delivery_address || '', delivery_landmark: delivery_landmark || '',
     delivery_location: { lat: delivery_lat || null, lng: delivery_lng || null },
     delivery_slot: null, payment_status: 'pending', payment_amount: 0,
-    delivery_status: 'pending', delivery_person_id: null,
+    // 'awaiting_payment' — decorators notified only after payment verified
+    delivery_status: 'awaiting_payment', delivery_person_id: null,
     assigned_decorators: [], accepted_decorators: [], created_at: new Date(),
   }
   await db.collection('gift_orders').insertOne(giftOrder)
-  const activePersons = await db.collection('delivery_persons').find({ is_active: true }).toArray()
-  if (activePersons.length > 0) {
-    const assignedIds = activePersons.map(p => p.id)
-    await db.collection('gift_orders').updateOne({ id: giftOrder.id }, { $set: { assigned_decorators: assignedIds } })
-    giftOrder.assigned_decorators = assignedIds
-  }
+  // Decorator assignment happens in /payments/verify — not here
   const { _id, ...clean } = giftOrder
   return ok(clean)
 }))

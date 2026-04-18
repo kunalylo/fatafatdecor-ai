@@ -80,6 +80,22 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
     await db.collection('users').updateOne({ id: payment.user_id }, { $inc: { credits: 1 } })
     const payUser = await db.collection('users').findOne({ id: payment.user_id })
     if (payUser?.phone) await sendWhatsApp(payUser.phone, `FatafatDecor: Payment of Rs.${payment.amount} received! Your booking is confirmed. You earned +1 free credit! Decorator will arrive at the selected time. -FatafatDecor`)
+
+    // NOW assign decorators and notify them — only after confirmed payment
+    if (paidOrder && (!paidOrder.assigned_decorators || paidOrder.assigned_decorators.length === 0)) {
+      const availablePersons = await db.collection('delivery_persons').find({ is_active: true }).toArray()
+      if (availablePersons.length > 0) {
+        const assignedIds  = availablePersons.map(p => p.id)
+        const assignedInfo = availablePersons.map(p => ({ id: p.id, name: p.name, phone: p.phone }))
+        await db.collection('orders').updateOne(
+          { id: payment.order_id },
+          { $set: { assigned_decorators: assignedIds, assigned_decorators_info: assignedInfo, delivery_status: 'pending' } }
+        )
+        for (const dp of availablePersons) {
+          if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor NEW ORDER #${payment.order_id.slice(0, 8)}: ${paidOrder.delivery_address || 'Address not set'}. Amount: Rs.${paidOrder.total_cost}. Open your decorator app now to accept! -FatafatDecor`)
+        }
+      }
+    }
   }
   if (payment.type === 'gift_delivery' && payment.order_id) {
     // Validate payment amount covers the gift order total
@@ -91,6 +107,22 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
     )
     const giftPayUser = await db.collection('users').findOne({ id: payment.user_id })
     if (giftPayUser?.phone) await sendWhatsApp(giftPayUser.phone, `FatafatDecor: Gift order payment of Rs.${payment.amount} received! Your gift delivery is confirmed. -FatafatDecor`)
+
+    // Assign decorators to gift order now that payment is confirmed
+    if (giftOrder && (!giftOrder.assigned_decorators || giftOrder.assigned_decorators.length === 0)) {
+      const activePersons = await db.collection('delivery_persons').find({ is_active: true }).toArray()
+      if (activePersons.length > 0) {
+        const assignedIds  = activePersons.map(p => p.id)
+        const assignedInfo = activePersons.map(p => ({ id: p.id, name: p.name, phone: p.phone }))
+        await db.collection('gift_orders').updateOne(
+          { id: payment.order_id },
+          { $set: { assigned_decorators: assignedIds, assigned_decorators_info: assignedInfo, delivery_status: 'pending' } }
+        )
+        for (const dp of activePersons) {
+          if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor GIFT ORDER #${payment.order_id.slice(0, 8)}: ${giftOrder.delivery_address || 'Address not set'}. Amount: Rs.${giftOrder.gift_total}. Open your decorator app now to accept! -FatafatDecor`)
+        }
+      }
+    }
   }
   return ok({ success: true, type: payment.type })
 }))
