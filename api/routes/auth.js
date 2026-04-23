@@ -283,12 +283,13 @@ router.post('/auth/push-token', requireUser, asyncRoute(async (req, res, ok, err
 // POST /auth/delete-account
 router.post('/auth/delete-account', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { email, password, google_id } = req.body
+  const { email, password, google_id, apple_account } = req.body
   if (!email) return err('Email required')
   let user
   if (google_id) {
-    // Google-only accounts have no password — verify via google_id
     user = await db.collection('users').findOne({ email, google_id })
+  } else if (apple_account) {
+    user = await db.collection('users').findOne({ email, auth_provider: 'apple' })
   } else {
     if (!password) return err('Email and password required')
     user = await db.collection('users').findOne({ email, password: hashPwd(password) })
