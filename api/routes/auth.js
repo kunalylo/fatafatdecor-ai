@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
-import { signToken } from '../jwt.js'
+import { signToken, requireUser } from '../jwt.js'
 import { hashPwd, hashOtp, sendOtpSms, asyncRoute } from '../helpers.js'
 
 const router = Router()
@@ -269,6 +269,15 @@ router.post('/auth/apple', asyncRoute(async (req, res, ok, err) => {
   const { password: _, _id, ...safeUser } = user
   const token = await signToken({ user_id: safeUser.id, role: safeUser.role })
   return ok({ ...safeUser, token })
+}))
+
+// POST /auth/push-token — save Expo push token for the logged-in user
+router.post('/auth/push-token', requireUser, asyncRoute(async (req, res, ok, err) => {
+  const { push_token } = req.body
+  if (!push_token) return err('push_token required')
+  const db = await connectToMongo()
+  await db.collection('users').updateOne({ id: req.userId }, { $set: { push_token } })
+  return ok({ success: true })
 }))
 
 // POST /auth/delete-account
