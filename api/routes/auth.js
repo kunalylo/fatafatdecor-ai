@@ -243,6 +243,34 @@ router.post('/auth/google', asyncRoute(async (req, res, ok, err) => {
   return ok({ ...safeUser, token })
 }))
 
+// POST /auth/apple
+router.post('/auth/apple', asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const { apple_id, email, name } = req.body
+  if (!apple_id) return err('apple_id required')
+  let user = await db.collection('users').findOne(
+    email ? { $or: [{ apple_id }, { email }] } : { apple_id }
+  )
+  if (!user) {
+    // Apple only sends email+name on first sign-in; subsequent logins have null
+    const displayName = name || (email ? email.split('@')[0] : 'Apple User')
+    user = {
+      id: uuidv4(), name: displayName, email: email || '',
+      phone: '', password: null, role: 'user',
+      credits: 1, has_purchased_credits: false,
+      location: null, city: null,
+      apple_id, auth_provider: 'apple', created_at: new Date(),
+    }
+    await db.collection('users').insertOne(user)
+  } else if (!user.apple_id) {
+    await db.collection('users').updateOne({ id: user.id }, { $set: { apple_id, auth_provider: 'apple' } })
+    user = { ...user, apple_id }
+  }
+  const { password: _, _id, ...safeUser } = user
+  const token = await signToken({ user_id: safeUser.id, role: safeUser.role })
+  return ok({ ...safeUser, token })
+}))
+
 // POST /auth/delete-account
 router.post('/auth/delete-account', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
