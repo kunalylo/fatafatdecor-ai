@@ -127,6 +127,48 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
   return ok({ success: true, type: payment.type })
 }))
 
+// POST /payments/verify-apple-iap — requires JWT
+// Trusts Apple-validated purchase; uses transaction_id uniqueness to prevent replays
+router.post('/payments/verify-apple-iap', requireUser, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const { product_id, transaction_id } = req.body
+  if (!product_id || !transaction_id) return err('Missing fields', 400)
+
+  const PRODUCT_CREDITS = {
+    'in.co.ylo.fatafatdecor.credits.1': 1,
+    'in.co.ylo.fatafatdecor.credits.5': 5,
+    'in.co.ylo.fatafatdecor.credits.12': 12,
+    'in.co.ylo.fatafatdecor.credits.25': 25,
+  }
+  const credits_count = PRODUCT_CREDITS[product_id]
+  if (!credits_count) return err('Invalid product', 400)
+
+  // Replay-attack prevention — each Apple transaction ID is globally unique
+  const existing = await db.collection('payments').findOne({ apple_transaction_id: transaction_id })
+  if (existing) {
+    if (existing.user_id !== req.userId) return err('Transaction already used by another account', 403)
+    if (existing.status === 'verified') {
+      const u = await db.collection('users').findOne({ id: req.userId })
+      return ok({ success: true, credits_added: 0, new_credits: u?.credits || 0, already_verified: true })
+    }
+  }
+
+  const payment = {
+    id: uuidv4(), type: 'credits', platform: 'apple_iap',
+    user_id: req.userId, credits_count,
+    apple_product_id: product_id, apple_transaction_id: transaction_id,
+    status: 'verified', created_at: new Date(), verified_at: new Date(),
+  }
+  await db.collection('payments').insertOne(payment)
+
+  const updatedUser = await db.collection('users').findOneAndUpdate(
+    { id: req.userId },
+    { $inc: { credits: credits_count }, $set: { has_purchased_credits: true } },
+    { returnDocument: 'after' }
+  )
+  return ok({ success: true, credits_added: credits_count, new_credits: updatedUser?.credits || 0 })
+}))
+
 // POST /payments/handle-failure — requires JWT
 router.post('/payments/handle-failure', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
