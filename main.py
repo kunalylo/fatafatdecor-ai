@@ -400,7 +400,7 @@ Respond ONLY with this exact JSON:
             fal_client.run,
             "fal-ai/any-llm",
             arguments={
-                "model": "google/gemini-flash-1-5",
+                "model": "google/gemini-flash-1.5",
                 "system_prompt": selection_system,
                 "prompt": selection_prompt,
             },
@@ -569,7 +569,7 @@ Respond ONLY with valid JSON (no markdown):
             fal_client.run,
             "fal-ai/any-llm",
             arguments={
-                "model": "google/gemini-flash-1-5",
+                "model": "google/gemini-flash-1.5",
                 "system_prompt": system_prompt,
                 "prompt": f"Analyze this decoration image{(' named: ' + req.name) if req.name else ''}. Count ALL items. Use FatafatDecor Indian pricing.",
                 "image_url": image_url,
