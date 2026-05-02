@@ -400,7 +400,7 @@ Respond ONLY with this exact JSON:
             fal_client.run,
             "fal-ai/any-llm",
             arguments={
-                "model": "google/gemini-flash-1-5",
+                "model": "google/gemini-flash-1.5",
                 "system_prompt": selection_system,
                 "prompt": selection_prompt,
             },
