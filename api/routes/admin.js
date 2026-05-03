@@ -148,13 +148,13 @@ router.get('/admin/gifts', asyncRoute(async (req, res, ok) => {
 // POST /admin/gifts — create gift
 router.post('/admin/gifts', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { name, description, price, image_url, sr } = req.body
+  const { name, description, price, image_url, sr, category, colour } = req.body
   if (!name) return err('Gift name required')
   const gift = {
     id: uuidv4(), name, description: description || '',
     price: Number(price) || 0, image_url: image_url || '',
-    sr: Number(sr) || 0, active: true, is_active: true,
-    created_at: new Date()
+    sr: Number(sr) || 0, category: category || '', colour: colour || '',
+    active: true, is_active: true, created_at: new Date()
   }
   await db.collection('gifts').insertOne(gift)
   const { _id, ...clean } = gift
