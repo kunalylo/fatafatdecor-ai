@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
-import { hashPwd, sendWhatsApp, asyncRoute } from '../helpers.js'
+import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute } from '../helpers.js'
 import { signToken, requireDp, requireAdmin } from '../jwt.js'
 
 const router = Router()
@@ -161,11 +161,10 @@ router.post('/dp/generate-otp', requireDp, asyncRoute(async (req, res, ok, err) 
     { id: order_id },
     { $set: { verification_otp: otp, otp_generated_at: new Date() } }
   )
-  // Notify customer with their OTP via WhatsApp
+  // Notify customer with their OTP via SMS + Email (replaces WhatsApp)
   const customer = await db.collection('users').findOne({ id: order.user_id })
-  if (customer?.phone) {
-    await sendWhatsApp(customer.phone, `FatafatDecor: Your decorator verification OTP is ${otp}. Share this ONLY with your decorator when they arrive. -FatafatDecor`)
-  }
+  if (customer?.phone) sendOtpSms(customer.phone, otp)
+  if (customer?.email) sendVerificationOtpEmail(customer.name, customer.email, otp, order_id)
   return ok({ success: true, order_id })
 }))
 

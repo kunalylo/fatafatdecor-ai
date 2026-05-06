@@ -170,6 +170,44 @@ ${EMAIL_HEADER}${content}${EMAIL_FOOTER}
 </table></td></tr></table></body></html>`
 }
 
+// ── Decorator Verification OTP Email ────────────────────────
+export async function sendVerificationOtpEmail(name, email, otp, orderId) {
+  if (!resend || !email) return
+  const orderShort = orderId ? orderId.slice(0, 8).toUpperCase() : ''
+  try {
+    await resend.emails.send({
+      from: 'FatafatDecor <verify@mail.fatafatdecor.com>',
+      to: email,
+      subject: `Decorator Verification OTP: ${otp}`,
+      html: emailWrap(`
+  <tr><td style="padding:32px 32px 28px;text-align:center">
+    <h2 style="margin:0 0 8px;font-size:22px;color:#1f2937">Decorator Verification</h2>
+    ${orderShort ? `<p style="margin:0 0 24px;font-size:13px;color:#9ca3af">Order #${orderShort}</p>` : ''}
+
+    <p style="margin:0 0 24px;font-size:15px;color:#4b5563;line-height:1.7">
+      Hi <strong>${name}</strong>, your decorator is on the way! Share this OTP <strong style="color:#ec4899">only when they arrive</strong> at your door.
+    </p>
+
+    <!-- OTP Box -->
+    <table cellpadding="0" cellspacing="0" style="margin:0 auto 24px"><tr><td style="background:linear-gradient(135deg,#fdf2f8,#fce7f3);border:2px dashed #f9a8d4;border-radius:14px;padding:24px 40px">
+      <p style="margin:0 0 8px;font-size:12px;color:#9ca3af;letter-spacing:1px;font-weight:600">YOUR OTP</p>
+      <p style="margin:0;font-size:38px;letter-spacing:8px;font-weight:700;color:#ec4899;font-family:'Courier New',monospace">${otp}</p>
+    </td></tr></table>
+
+    <!-- Warning -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px">
+      <tr><td style="padding:14px 18px;background:#fef3c7;border-radius:10px;border-left:4px solid #f59e0b;text-align:left">
+        <strong style="color:#b45309;font-size:13px">⚠️ SECURITY NOTICE</strong><br/>
+        <span style="color:#92400e;font-size:13px;line-height:1.5">Do NOT share this OTP over phone, SMS or chat. Only tell it to the decorator face-to-face when they arrive at your location.</span>
+      </td></tr>
+    </table>
+  </td></tr>`),
+    })
+  } catch (e) {
+    console.error('[Resend] Verification OTP email failed:', e.message)
+  }
+}
+
 // ── Order Booked Email ──────────────────────────────────────
 export async function sendOrderBookedEmail(name, email, order, orderType) {
   if (!resend || !email) return
