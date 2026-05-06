@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
 import { signToken, requireUser } from '../jwt.js'
-import { hashPwd, hashOtp, sendOtpSms, asyncRoute } from '../helpers.js'
+import { hashPwd, hashOtp, sendOtpSms, sendWelcomeEmail, asyncRoute } from '../helpers.js'
 
 const router = Router()
 
@@ -24,6 +24,7 @@ router.post('/auth/register', asyncRoute(async (req, res, ok, err) => {
     auth_provider: 'email', created_at: new Date(),
   }
   await db.collection('users').insertOne(user)
+  sendWelcomeEmail(name, email)
   const { password: _, _id, ...safeUser } = user
   const token = await signToken({ user_id: safeUser.id, role: safeUser.role })
   return ok({ ...safeUser, token })
@@ -85,6 +86,7 @@ router.post('/auth/verify-signup-otp', asyncRoute(async (req, res, ok, err) => {
     location: null, city: null, auth_provider: 'email', created_at: new Date(),
   }
   await db.collection('users').insertOne(user)
+  sendWelcomeEmail(user.name, email)
   await db.collection('signup_otps').deleteOne({ phone })
   const { password: _, _id, ...safeUser } = user
   const token = await signToken({ user_id: safeUser.id, role: safeUser.role })
@@ -234,6 +236,7 @@ router.post('/auth/google', asyncRoute(async (req, res, ok, err) => {
       auth_provider: 'google', created_at: new Date(),
     }
     await db.collection('users').insertOne(user)
+    sendWelcomeEmail(user.name, email)
   } else if (!user.google_id) {
     await db.collection('users').updateOne({ id: user.id }, { $set: { google_id, photo_url, auth_provider: 'google' } })
     user = { ...user, google_id, photo_url }
@@ -262,6 +265,7 @@ router.post('/auth/apple', asyncRoute(async (req, res, ok, err) => {
       apple_id, auth_provider: 'apple', created_at: new Date(),
     }
     await db.collection('users').insertOne(user)
+    sendWelcomeEmail(user.name, user.email)
   } else if (!user.apple_id) {
     await db.collection('users').updateOne({ id: user.id }, { $set: { apple_id, auth_provider: 'apple' } })
     user = { ...user, apple_id }

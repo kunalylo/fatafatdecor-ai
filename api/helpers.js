@@ -1,5 +1,8 @@
 import crypto from 'crypto'
-import { TWO_FACTOR_API_KEY, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN } from './config.js'
+import { Resend } from 'resend'
+import { TWO_FACTOR_API_KEY, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN, RESEND_API_KEY } from './config.js'
+
+const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null
 
 // ── Passwords & OTPs ─────────────────────────────────────────
 export function hashPwd(pwd) {
@@ -45,6 +48,70 @@ export async function sendWhatsApp(phone, message) {
     })
   } catch (e) {
     console.error('[WhatsApp]', e.message)
+  }
+}
+
+// ── Welcome Email via Resend ────────────────────────────────
+export async function sendWelcomeEmail(name, email) {
+  if (!resend || !email) return
+  try {
+    await resend.emails.send({
+      from: 'FatafatDecor <welcome@mail.fatafatdecor.com>',
+      to: email,
+      subject: 'Welcome to FatafatDecor! 🎉',
+      html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;padding:40px 20px">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
+  <tr><td style="background:linear-gradient(135deg,#7c3aed,#a855f7);padding:40px 30px;text-align:center">
+    <h1 style="margin:0;color:#ffffff;font-size:28px">Welcome to FatafatDecor!</h1>
+    <p style="margin:8px 0 0;color:#e9d5ff;font-size:16px">Your space, beautifully transformed</p>
+  </td></tr>
+  <tr><td style="padding:40px 30px">
+    <p style="margin:0 0 20px;font-size:18px;color:#1f2937">Hi ${name},</p>
+    <p style="margin:0 0 16px;font-size:15px;color:#4b5563;line-height:1.6">
+      Thank you for joining FatafatDecor! We're excited to help you transform your spaces with AI-powered decoration.
+    </p>
+    <p style="margin:0 0 24px;font-size:15px;color:#4b5563;line-height:1.6">Here's what you can do:</p>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+      <tr><td style="padding:12px 16px;background:#f3f4f6;border-radius:8px;margin-bottom:8px">
+        <strong style="color:#7c3aed">📸 Upload a photo</strong>
+        <span style="color:#6b7280;font-size:14px"> — snap a pic of any room</span>
+      </td></tr>
+      <tr><td style="height:8px"></td></tr>
+      <tr><td style="padding:12px 16px;background:#f3f4f6;border-radius:8px">
+        <strong style="color:#7c3aed">✨ AI decorates it</strong>
+        <span style="color:#6b7280;font-size:14px"> — see stunning decoration ideas instantly</span>
+      </td></tr>
+      <tr><td style="height:8px"></td></tr>
+      <tr><td style="padding:12px 16px;background:#f3f4f6;border-radius:8px">
+        <strong style="color:#7c3aed">🛒 Order & get it delivered</strong>
+        <span style="color:#6b7280;font-size:14px"> — our decorators bring it to life</span>
+      </td></tr>
+    </table>
+    <p style="margin:0 0 24px;font-size:15px;color:#4b5563;line-height:1.6">
+      You've received <strong style="color:#7c3aed">3 free credits</strong> to try our AI decoration feature. Start exploring now!
+    </p>
+    <table cellpadding="0" cellspacing="0" style="margin:0 auto"><tr><td style="background:#7c3aed;border-radius:8px;padding:14px 32px">
+      <a href="https://fatafatdecor.com" style="color:#ffffff;text-decoration:none;font-size:16px;font-weight:600">Start Decorating</a>
+    </td></tr></table>
+  </td></tr>
+  <tr><td style="padding:24px 30px;background:#f9fafb;text-align:center;border-top:1px solid #e5e7eb">
+    <p style="margin:0;font-size:13px;color:#9ca3af">
+      FatafatDecor — AI-Powered Decoration, Delivered to Your Door
+    </p>
+  </td></tr>
+</table>
+</td></tr></table>
+</body>
+</html>`,
+    })
+  } catch (e) {
+    console.error('[Resend] Welcome email failed:', e.message)
   }
 }
 
