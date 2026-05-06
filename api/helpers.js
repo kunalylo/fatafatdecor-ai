@@ -70,7 +70,7 @@ export async function sendWelcomeEmail(name, email) {
 
   <!-- Logo + Header -->
   <tr><td style="background:linear-gradient(135deg,#ec4899,#f472b6,#f9a8d4);padding:36px 30px 28px;text-align:center">
-    <img src="https://fatafatdecor.com/logo.png" alt="FatafatDecor" width="90" height="90" style="display:block;margin:0 auto 16px;border-radius:50%;border:3px solid rgba(255,255,255,0.4);background:#fff" />
+    <img src="https://ik.imagekit.io/jcp2urr7b/branding/icon-512.png?updatedAt=1776066798777" alt="FatafatDecor" width="90" height="90" style="display:block;margin:0 auto 16px;border-radius:50%;border:3px solid rgba(255,255,255,0.4);background:#fff" />
     <h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:700;letter-spacing:-0.5px">Welcome to FatafatDecor!</h1>
     <p style="margin:6px 0 0;color:rgba(255,255,255,0.85);font-size:15px">Your space, beautifully transformed</p>
   </td></tr>
@@ -113,6 +113,23 @@ export async function sendWelcomeEmail(name, email) {
     <table cellpadding="0" cellspacing="0" style="margin:0 auto"><tr><td style="background:linear-gradient(135deg,#ec4899,#f472b6);border-radius:10px;padding:15px 40px;box-shadow:0 4px 14px rgba(236,72,153,0.3)">
       <a href="https://fatafatdecor.com" style="color:#ffffff;text-decoration:none;font-size:16px;font-weight:700;letter-spacing:0.3px">Start Decorating →</a>
     </td></tr></table>
+  </td></tr>
+
+  <!-- Download App -->
+  <tr><td style="padding:24px 32px 28px;text-align:center;border-top:1px solid #fce7f3">
+    <p style="margin:0 0 16px;font-size:15px;color:#1f2937;font-weight:600">📱 Get the App</p>
+    <table cellpadding="0" cellspacing="0" style="margin:0 auto"><tr>
+      <td style="padding-right:12px">
+        <a href="https://play.google.com/store/apps/details?id=in.co.ylo.fatafatdecor.twa" style="text-decoration:none">
+          <img src="https://ik.imagekit.io/jcp2urr7b/branding/play-store-icon.png?updatedAt=1776463541078" alt="Get it on Google Play" height="44" style="display:block;border-radius:8px" />
+        </a>
+      </td>
+      <td>
+        <a href="https://apps.apple.com/us/app/fatafatdecor/id6763261185" style="text-decoration:none">
+          <img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" alt="Download on the App Store" height="44" style="display:block;border-radius:8px" />
+        </a>
+      </td>
+    </tr></table>
   </td></tr>
 
   <!-- Footer -->
