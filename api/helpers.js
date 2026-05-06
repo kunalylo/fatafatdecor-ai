@@ -148,6 +148,197 @@ export async function sendWelcomeEmail(name, email) {
   }
 }
 
+const LOGO_URL = 'https://ik.imagekit.io/jcp2urr7b/branding/icon-512.png?updatedAt=1776066798777'
+const EMAIL_HEADER = `
+  <tr><td style="background:linear-gradient(135deg,#ec4899,#f472b6,#f9a8d4);padding:32px 30px 24px;text-align:center">
+    <img src="${LOGO_URL}" alt="FatafatDecor" width="70" height="70" style="display:block;margin:0 auto 12px;border-radius:50%;border:3px solid rgba(255,255,255,0.4);background:#fff" />
+  </td></tr>`
+const EMAIL_FOOTER = `
+  <tr><td style="padding:22px 30px;background:#fdf2f8;text-align:center;border-top:1px solid #fce7f3">
+    <p style="margin:0 0 6px;font-size:13px;color:#ec4899;font-weight:600">FatafatDecor</p>
+    <p style="margin:0;font-size:12px;color:#9ca3af">AI-Powered Decoration, Delivered to Your Door</p>
+  </td></tr>`
+
+function emailWrap(content) {
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#fff5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#fff5f7;padding:40px 20px">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(236,72,153,0.12)">
+${EMAIL_HEADER}${content}${EMAIL_FOOTER}
+</table></td></tr></table></body></html>`
+}
+
+// ── Order Booked Email ──────────────────────────────────────
+export async function sendOrderBookedEmail(name, email, order, orderType) {
+  if (!resend || !email) return
+  const isGift = orderType === 'gift'
+  const orderId = order.id.slice(0, 8).toUpperCase()
+  const total = order.total_cost || order.gift_total || 0
+  const paidNow = order.payment_amount || 0
+  const remaining = isGift ? 0 : total - paidNow
+  const itemsHtml = isGift
+    ? (order.gift_items || []).map(g => `
+      <tr><td style="padding:10px 14px;border-bottom:1px solid #fce7f3;font-size:14px;color:#1f2937">${g.name || 'Gift Item'}</td>
+      <td style="padding:10px 14px;border-bottom:1px solid #fce7f3;font-size:14px;color:#1f2937;text-align:center">${g.quantity || 1}</td>
+      <td style="padding:10px 14px;border-bottom:1px solid #fce7f3;font-size:14px;color:#1f2937;text-align:right">Rs.${(Number(g.price) || 0) * (g.quantity || 1)}</td></tr>`).join('')
+    : (order.items || []).map(item => `
+      <tr><td style="padding:10px 14px;border-bottom:1px solid #fce7f3;font-size:14px;color:#1f2937" colspan="2">${item.name || item.title || 'Decoration Item'}</td>
+      <td style="padding:10px 14px;border-bottom:1px solid #fce7f3;font-size:14px;color:#1f2937;text-align:right">Rs.${item.price || item.cost || 0}</td></tr>`).join('')
+
+  try {
+    await resend.emails.send({
+      from: 'FatafatDecor <orders@mail.fatafatdecor.com>',
+      to: email,
+      subject: `Order Confirmed! #${orderId} 🎉`,
+      html: emailWrap(`
+  <tr><td style="padding:32px 32px 28px">
+    <h2 style="margin:0 0 6px;font-size:22px;color:#1f2937">Order Confirmed!</h2>
+    <p style="margin:0 0 24px;font-size:14px;color:#9ca3af">Order #${orderId}</p>
+
+    <p style="margin:0 0 20px;font-size:15px;color:#4b5563;line-height:1.7">
+      Hi <strong>${name}</strong>, your ${isGift ? 'gift' : 'decoration'} order has been booked successfully!
+    </p>
+
+    <!-- Order Items -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;border:1px solid #fce7f3;border-radius:10px;overflow:hidden">
+      <tr style="background:#fdf2f8">
+        <td style="padding:10px 14px;font-size:13px;color:#be185d;font-weight:600">${isGift ? 'Gift' : 'Item'}</td>
+        ${isGift ? '<td style="padding:10px 14px;font-size:13px;color:#be185d;font-weight:600;text-align:center">Qty</td>' : '<td></td>'}
+        <td style="padding:10px 14px;font-size:13px;color:#be185d;font-weight:600;text-align:right">Price</td>
+      </tr>
+      ${itemsHtml}
+    </table>
+
+    <!-- Payment Summary -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;background:#fdf2f8;border-radius:10px;overflow:hidden">
+      <tr><td style="padding:12px 16px;font-size:14px;color:#4b5563">Order Total</td>
+      <td style="padding:12px 16px;font-size:14px;color:#1f2937;text-align:right;font-weight:600">Rs.${total}</td></tr>
+      <tr><td style="padding:12px 16px;font-size:14px;color:#4b5563">Paid Now ${isGift ? '(100%)' : '(50%)'}</td>
+      <td style="padding:12px 16px;font-size:14px;color:#16a34a;text-align:right;font-weight:600">Rs.${paidNow}</td></tr>
+      ${remaining > 0 ? `<tr><td style="padding:12px 16px;font-size:14px;color:#4b5563">Due After Decoration (50%)</td>
+      <td style="padding:12px 16px;font-size:14px;color:#ea580c;text-align:right;font-weight:600">Rs.${remaining}</td></tr>` : ''}
+    </table>
+
+    ${order.delivery_address ? `
+    <!-- Delivery Address -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+      <tr><td style="padding:14px 18px;background:#f0fdf4;border-radius:10px;border-left:4px solid #22c55e">
+        <strong style="color:#15803d;font-size:13px">📍 DELIVERY ADDRESS</strong><br/>
+        <span style="color:#4b5563;font-size:14px;line-height:1.5">${order.delivery_address}${order.delivery_landmark ? ', ' + order.delivery_landmark : ''}</span>
+      </td></tr>
+    </table>` : ''}
+
+    <p style="margin:0 0 4px;font-size:14px;color:#4b5563;line-height:1.6;text-align:center">
+      Our decorator will be assigned shortly and will arrive at your selected time slot.
+    </p>
+  </td></tr>`),
+    })
+  } catch (e) {
+    console.error('[Resend] Order booked email failed:', e.message)
+  }
+}
+
+// ── Payment Receipt Email ───────────────────────────────────
+export async function sendPaymentReceiptEmail(name, email, payment, order, orderType) {
+  if (!resend || !email) return
+  const isGift = orderType === 'gift'
+  const orderId = (payment.order_id || payment.id).slice(0, 8).toUpperCase()
+  const total = order ? (order.total_cost || order.gift_total || 0) : payment.amount
+  const isFullPayment = isGift || (order && order.payment_status === 'full')
+  const paidSoFar = (order?.payment_amount || 0)
+  const remaining = isGift ? 0 : Math.max(0, total - paidSoFar)
+
+  let paymentLabel, paymentPhase
+  if (isGift) {
+    paymentLabel = 'Full Payment (100%)'
+    paymentPhase = 'Full payment received'
+  } else if (remaining <= 0) {
+    paymentLabel = 'Final Payment (50%)'
+    paymentPhase = 'All payments complete'
+  } else {
+    paymentLabel = 'Booking Payment (50%)'
+    paymentPhase = '50% remaining after decoration'
+  }
+
+  const dateStr = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+  const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+
+  try {
+    await resend.emails.send({
+      from: 'FatafatDecor <receipts@mail.fatafatdecor.com>',
+      to: email,
+      subject: `Payment Receipt — Rs.${payment.amount} | #${orderId}`,
+      html: emailWrap(`
+  <tr><td style="padding:32px 32px 28px">
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+      <tr><td>
+        <h2 style="margin:0 0 4px;font-size:22px;color:#1f2937">Payment Receipt</h2>
+        <p style="margin:0;font-size:13px;color:#9ca3af">${dateStr} at ${timeStr}</p>
+      </td>
+      <td style="text-align:right;vertical-align:top">
+        <span style="display:inline-block;background:#dcfce7;color:#15803d;padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600">✓ Paid</span>
+      </td></tr>
+    </table>
+
+    <p style="margin:0 0 24px;font-size:15px;color:#4b5563">Hi <strong>${name}</strong>, here's your payment receipt.</p>
+
+    <!-- Receipt Details -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden">
+      <tr><td style="padding:12px 16px;background:#f9fafb;font-size:13px;color:#6b7280;border-bottom:1px solid #e5e7eb">Order ID</td>
+      <td style="padding:12px 16px;background:#f9fafb;font-size:14px;color:#1f2937;text-align:right;border-bottom:1px solid #e5e7eb;font-weight:600">#${orderId}</td></tr>
+      <tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;border-bottom:1px solid #e5e7eb">Order Type</td>
+      <td style="padding:12px 16px;font-size:14px;color:#1f2937;text-align:right;border-bottom:1px solid #e5e7eb">${isGift ? '🎁 Gift Order' : '🎨 Decoration Order'}</td></tr>
+      <tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;border-bottom:1px solid #e5e7eb">Payment Type</td>
+      <td style="padding:12px 16px;font-size:14px;color:#1f2937;text-align:right;border-bottom:1px solid #e5e7eb">${paymentLabel}</td></tr>
+      <tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;border-bottom:1px solid #e5e7eb">Transaction ID</td>
+      <td style="padding:12px 16px;font-size:13px;color:#1f2937;text-align:right;border-bottom:1px solid #e5e7eb;word-break:break-all">${payment.razorpay_payment_id || payment.id}</td></tr>
+      <tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;border-bottom:1px solid #e5e7eb">Payment Method</td>
+      <td style="padding:12px 16px;font-size:14px;color:#1f2937;text-align:right;border-bottom:1px solid #e5e7eb">Razorpay</td></tr>
+    </table>
+
+    <!-- Amount Box -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;background:linear-gradient(135deg,#fdf2f8,#fce7f3);border-radius:12px;overflow:hidden">
+      <tr><td style="padding:14px 18px;font-size:14px;color:#4b5563">Order Total</td>
+      <td style="padding:14px 18px;font-size:14px;color:#1f2937;text-align:right;font-weight:600">Rs.${total}</td></tr>
+      <tr><td style="padding:14px 18px;font-size:14px;color:#4b5563;font-weight:600">Amount Paid</td>
+      <td style="padding:14px 18px;font-size:18px;color:#ec4899;text-align:right;font-weight:700">Rs.${payment.amount}</td></tr>
+      ${remaining > 0 ? `<tr><td style="padding:14px 18px;font-size:14px;color:#4b5563">Remaining Due</td>
+      <td style="padding:14px 18px;font-size:14px;color:#ea580c;text-align:right;font-weight:600">Rs.${remaining}</td></tr>` : ''}
+    </table>
+
+    <!-- Payment Phase Indicator -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+      ${isGift ? `
+      <tr><td style="padding:12px 16px;background:#dcfce7;border-radius:8px;text-align:center">
+        <span style="color:#15803d;font-size:14px;font-weight:600">✓ ${paymentPhase} — Order is fully paid</span>
+      </td></tr>` : `
+      <tr><td style="padding:0 0 8px"><strong style="font-size:13px;color:#6b7280">PAYMENT PROGRESS</strong></td></tr>
+      <tr><td style="padding:0">
+        <table width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td style="width:50%;padding:10px;background:${remaining <= 0 ? '#dcfce7' : '#dcfce7'};border-radius:8px 0 0 8px;text-align:center;border-right:2px solid #fff">
+            <span style="font-size:12px;color:#15803d;font-weight:600">✓ 50% at Booking</span><br/>
+            <span style="font-size:11px;color:#6b7280">Paid</span>
+          </td>
+          <td style="width:50%;padding:10px;background:${remaining <= 0 ? '#dcfce7' : '#fef3c7'};border-radius:0 8px 8px 0;text-align:center">
+            <span style="font-size:12px;color:${remaining <= 0 ? '#15803d' : '#b45309'};font-weight:600">${remaining <= 0 ? '✓' : '◯'} 50% After Decoration</span><br/>
+            <span style="font-size:11px;color:#6b7280">${remaining <= 0 ? 'Paid' : 'Pending'}</span>
+          </td>
+        </tr></table>
+      </td></tr>`}
+    </table>
+
+    <p style="margin:0;font-size:13px;color:#9ca3af;text-align:center;line-height:1.5">
+      This is an auto-generated receipt. For any queries, contact us via the app.
+    </p>
+  </td></tr>`),
+    })
+  } catch (e) {
+    console.error('[Resend] Payment receipt email failed:', e.message)
+  }
+}
+
 // ── City helpers ─────────────────────────────────────────────
 const CITY_ALIASES = {
   'पुणे':'Pune','पुना':'Pune','रांची':'Ranchi','राँची':'Ranchi',

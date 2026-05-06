@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import Razorpay from 'razorpay'
 import { connectToMongo } from '../db.js'
 import { requireUser } from '../jwt.js'
-import { sendWhatsApp, asyncRoute } from '../helpers.js'
+import { sendWhatsApp, sendOrderBookedEmail, sendPaymentReceiptEmail, asyncRoute } from '../helpers.js'
 import { RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } from '../config.js'
 
 const router = Router()
@@ -80,6 +80,10 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
     await db.collection('users').updateOne({ id: payment.user_id }, { $inc: { credits: 1 } })
     const payUser = await db.collection('users').findOne({ id: payment.user_id })
     if (payUser?.phone) await sendWhatsApp(payUser.phone, `FatafatDecor: Payment of Rs.${payment.amount} received! Your booking is confirmed. You earned +1 free credit! Decorator will arrive at the selected time. -FatafatDecor`)
+    if (payUser?.email) {
+      sendOrderBookedEmail(payUser.name, payUser.email, paidOrder, 'decoration')
+      sendPaymentReceiptEmail(payUser.name, payUser.email, payment, paidOrder, 'decoration')
+    }
 
     // NOW assign decorators and notify them — only after confirmed payment
     if (paidOrder && (!paidOrder.assigned_decorators || paidOrder.assigned_decorators.length === 0)) {
@@ -107,6 +111,10 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
     )
     const giftPayUser = await db.collection('users').findOne({ id: payment.user_id })
     if (giftPayUser?.phone) await sendWhatsApp(giftPayUser.phone, `FatafatDecor: Gift order payment of Rs.${payment.amount} received! Your gift delivery is confirmed. -FatafatDecor`)
+    if (giftPayUser?.email) {
+      sendOrderBookedEmail(giftPayUser.name, giftPayUser.email, giftOrder, 'gift')
+      sendPaymentReceiptEmail(giftPayUser.name, giftPayUser.email, payment, giftOrder, 'gift')
+    }
 
     // Assign decorators to gift order now that payment is confirmed
     if (giftOrder && (!giftOrder.assigned_decorators || giftOrder.assigned_decorators.length === 0)) {
