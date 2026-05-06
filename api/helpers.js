@@ -121,12 +121,12 @@ export async function sendWelcomeEmail(name, email) {
     <table cellpadding="0" cellspacing="0" style="margin:0 auto"><tr>
       <td style="padding-right:12px">
         <a href="https://play.google.com/store/apps/details?id=in.co.ylo.fatafatdecor.twa" style="text-decoration:none">
-          <img src="https://ik.imagekit.io/jcp2urr7b/branding/play-store-icon.png?updatedAt=1776463541078" alt="Get it on Google Play" height="44" style="display:block;border-radius:8px" />
+          <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get it on Google Play" height="44" style="display:block" />
         </a>
       </td>
       <td>
         <a href="https://apps.apple.com/us/app/fatafatdecor/id6763261185" style="text-decoration:none">
-          <img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" alt="Download on the App Store" height="44" style="display:block;border-radius:8px" />
+          <img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" alt="Download on the App Store" height="44" style="display:block" />
         </a>
       </td>
     </tr></table>
