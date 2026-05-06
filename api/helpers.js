@@ -63,48 +63,64 @@ export async function sendWelcomeEmail(name, email) {
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;padding:40px 20px">
+<body style="margin:0;padding:0;background:#fff5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#fff5f7;padding:40px 20px">
 <tr><td align="center">
-<table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
-  <tr><td style="background:linear-gradient(135deg,#7c3aed,#a855f7);padding:40px 30px;text-align:center">
-    <h1 style="margin:0;color:#ffffff;font-size:28px">Welcome to FatafatDecor!</h1>
-    <p style="margin:8px 0 0;color:#e9d5ff;font-size:16px">Your space, beautifully transformed</p>
+<table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(236,72,153,0.12)">
+
+  <!-- Logo + Header -->
+  <tr><td style="background:linear-gradient(135deg,#ec4899,#f472b6,#f9a8d4);padding:36px 30px 28px;text-align:center">
+    <img src="https://fatafatdecor.com/logo.png" alt="FatafatDecor" width="90" height="90" style="display:block;margin:0 auto 16px;border-radius:50%;border:3px solid rgba(255,255,255,0.4);background:#fff" />
+    <h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:700;letter-spacing:-0.5px">Welcome to FatafatDecor!</h1>
+    <p style="margin:6px 0 0;color:rgba(255,255,255,0.85);font-size:15px">Your space, beautifully transformed</p>
   </td></tr>
-  <tr><td style="padding:40px 30px">
-    <p style="margin:0 0 20px;font-size:18px;color:#1f2937">Hi ${name},</p>
-    <p style="margin:0 0 16px;font-size:15px;color:#4b5563;line-height:1.6">
-      Thank you for joining FatafatDecor! We're excited to help you transform your spaces with AI-powered decoration.
+
+  <!-- Body -->
+  <tr><td style="padding:36px 32px 28px">
+    <p style="margin:0 0 18px;font-size:18px;color:#1f2937;font-weight:600">Hi ${name} 👋</p>
+    <p style="margin:0 0 20px;font-size:15px;color:#4b5563;line-height:1.7">
+      Thank you for joining <strong style="color:#ec4899">FatafatDecor</strong>! We're thrilled to help you transform any space with AI-powered decoration.
     </p>
-    <p style="margin:0 0 24px;font-size:15px;color:#4b5563;line-height:1.6">Here's what you can do:</p>
+
+    <!-- Steps -->
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
-      <tr><td style="padding:12px 16px;background:#f3f4f6;border-radius:8px;margin-bottom:8px">
-        <strong style="color:#7c3aed">📸 Upload a photo</strong>
-        <span style="color:#6b7280;font-size:14px"> — snap a pic of any room</span>
+      <tr><td style="padding:14px 18px;background:linear-gradient(135deg,#fdf2f8,#fce7f3);border-radius:10px;border-left:4px solid #ec4899">
+        <strong style="color:#be185d;font-size:15px">📸 Upload a Photo</strong><br/>
+        <span style="color:#6b7280;font-size:13px;line-height:1.5">Snap a pic of any room you want to decorate</span>
       </td></tr>
-      <tr><td style="height:8px"></td></tr>
-      <tr><td style="padding:12px 16px;background:#f3f4f6;border-radius:8px">
-        <strong style="color:#7c3aed">✨ AI decorates it</strong>
-        <span style="color:#6b7280;font-size:14px"> — see stunning decoration ideas instantly</span>
+      <tr><td style="height:10px"></td></tr>
+      <tr><td style="padding:14px 18px;background:linear-gradient(135deg,#fdf2f8,#fce7f3);border-radius:10px;border-left:4px solid #f472b6">
+        <strong style="color:#be185d;font-size:15px">✨ AI Decorates It</strong><br/>
+        <span style="color:#6b7280;font-size:13px;line-height:1.5">See stunning decoration ideas generated instantly</span>
       </td></tr>
-      <tr><td style="height:8px"></td></tr>
-      <tr><td style="padding:12px 16px;background:#f3f4f6;border-radius:8px">
-        <strong style="color:#7c3aed">🛒 Order & get it delivered</strong>
-        <span style="color:#6b7280;font-size:14px"> — our decorators bring it to life</span>
+      <tr><td style="height:10px"></td></tr>
+      <tr><td style="padding:14px 18px;background:linear-gradient(135deg,#fdf2f8,#fce7f3);border-radius:10px;border-left:4px solid #f9a8d4">
+        <strong style="color:#be185d;font-size:15px">🎉 Order & Get It Delivered</strong><br/>
+        <span style="color:#6b7280;font-size:13px;line-height:1.5">Our decorators bring the design to life at your doorstep</span>
       </td></tr>
     </table>
-    <p style="margin:0 0 24px;font-size:15px;color:#4b5563;line-height:1.6">
-      You've received <strong style="color:#7c3aed">3 free credits</strong> to try our AI decoration feature. Start exploring now!
-    </p>
-    <table cellpadding="0" cellspacing="0" style="margin:0 auto"><tr><td style="background:#7c3aed;border-radius:8px;padding:14px 32px">
-      <a href="https://fatafatdecor.com" style="color:#ffffff;text-decoration:none;font-size:16px;font-weight:600">Start Decorating</a>
+
+    <!-- Free credits -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px">
+      <tr><td style="background:#fdf2f8;border:2px dashed #f9a8d4;border-radius:12px;padding:18px 20px;text-align:center">
+        <p style="margin:0 0 4px;font-size:14px;color:#9ca3af">YOUR FREE GIFT</p>
+        <p style="margin:0;font-size:22px;font-weight:700;color:#ec4899">🎁 3 Free AI Credits</p>
+        <p style="margin:6px 0 0;font-size:13px;color:#6b7280">Start designing your dream space right away!</p>
+      </td></tr>
+    </table>
+
+    <!-- CTA Button -->
+    <table cellpadding="0" cellspacing="0" style="margin:0 auto"><tr><td style="background:linear-gradient(135deg,#ec4899,#f472b6);border-radius:10px;padding:15px 40px;box-shadow:0 4px 14px rgba(236,72,153,0.3)">
+      <a href="https://fatafatdecor.com" style="color:#ffffff;text-decoration:none;font-size:16px;font-weight:700;letter-spacing:0.3px">Start Decorating →</a>
     </td></tr></table>
   </td></tr>
-  <tr><td style="padding:24px 30px;background:#f9fafb;text-align:center;border-top:1px solid #e5e7eb">
-    <p style="margin:0;font-size:13px;color:#9ca3af">
-      FatafatDecor — AI-Powered Decoration, Delivered to Your Door
-    </p>
+
+  <!-- Footer -->
+  <tr><td style="padding:22px 30px;background:#fdf2f8;text-align:center;border-top:1px solid #fce7f3">
+    <p style="margin:0 0 6px;font-size:13px;color:#ec4899;font-weight:600">FatafatDecor</p>
+    <p style="margin:0;font-size:12px;color:#9ca3af">AI-Powered Decoration, Delivered to Your Door</p>
   </td></tr>
+
 </table>
 </td></tr></table>
 </body>
