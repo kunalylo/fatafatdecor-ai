@@ -329,4 +329,16 @@ router.get('/admin/gift-orders', asyncRoute(async (req, res, ok) => {
   return ok(orders.map(({ _id, ...o }) => o))
 }))
 
+// PUT /admin/gift-orders/:id — update gift order status
+router.put('/admin/gift-orders/:id', asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const body = req.body; delete body._id
+  body.updated_at = new Date()
+  await db.collection('gift_orders').updateOne({ id: req.params.id }, { $set: body })
+  const order = await db.collection('gift_orders').findOne({ id: req.params.id })
+  if (!order) return err('Gift order not found', 404)
+  const { _id, ...clean } = order
+  return ok(clean)
+}))
+
 export default router
