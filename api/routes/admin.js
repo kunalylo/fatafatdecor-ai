@@ -148,19 +148,19 @@ router.put('/admin/orders/:id', asyncRoute(async (req, res, ok, err) => {
 // GET /admin/gifts — all gifts (including inactive)
 router.get('/admin/gifts', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
-  const gifts = await db.collection('gifts').find({}).sort({ sr: 1, name: 1 }).toArray()
+  const gifts = await db.collection('gifts').find({}).sort({ name: 1 }).toArray()
   return ok(gifts.map(({ _id, ...g }) => g))
 }))
 
 // POST /admin/gifts — create gift
 router.post('/admin/gifts', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { name, description, price, image_url, sr, category, colour, occasion } = req.body
+  const { name, description, price, image_url, stock, category, colour, occasion } = req.body
   if (!name) return err('Gift name required')
   const gift = {
     id: uuidv4(), name, description: description || '',
     price: Number(price) || 0, image_url: image_url || '',
-    sr: Number(sr) || 0, category: category || '', colour: colour || '',
+    stock: Number(stock) || 0, category: category || '', colour: colour || '',
     occasion: occasion || '', active: true, is_active: true, created_at: new Date()
   }
   await db.collection('gifts').insertOne(gift)
@@ -173,7 +173,7 @@ router.put('/admin/gifts/:id', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
   const body = req.body; delete body._id
   if (body.price !== undefined) body.price = Number(body.price)
-  if (body.sr !== undefined) body.sr = Number(body.sr)
+  if (body.stock !== undefined) body.stock = Number(body.stock)
   if (body.active !== undefined) body.is_active = body.active
   body.updated_at = new Date()
   await db.collection('gifts').updateOne({ id: req.params.id }, { $set: body })
