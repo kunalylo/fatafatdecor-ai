@@ -6,24 +6,42 @@ import { asyncRoute } from '../helpers.js'
 
 const router = Router()
 
-// POST /gift-orders — requires JWT
+// POST /gift-orders — requires JWT (with stock validation)
 router.post('/gift-orders', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db   = await connectToMongo()
   const user_id = req.userId
-  const { delivery_address, delivery_landmark, delivery_lat, delivery_lng, gift_items } = req.body
+  const { delivery_address, delivery_landmark, delivery_lat, delivery_lng, gift_items, gift_message } = req.body
   if (!Array.isArray(gift_items) || gift_items.length === 0) return err('gift_items array required')
+
+  // Stock validation — check each gift has enough stock
+  const giftIds = gift_items.map(g => g.gift_id)
+  const dbGifts = await db.collection('gifts').find({ id: { $in: giftIds } }).toArray()
+  const giftMap = Object.fromEntries(dbGifts.map(g => [g.id, g]))
+  for (const item of gift_items) {
+    const dbGift = giftMap[item.gift_id]
+    if (!dbGift) return err(`Gift "${item.name}" is no longer available`, 400)
+    if (dbGift.stock !== undefined && dbGift.stock < (item.quantity || 1))
+      return err(`"${item.name}" has only ${dbGift.stock} left in stock`, 400)
+  }
+
   const giftTotal = gift_items.reduce((s, g) => s + (Number(g.price) || 0) * (Number(g.quantity) || 1), 0)
   const giftOrder = {
     id: uuidv4(), user_id, order_type: 'gift', gift_items, gift_total: giftTotal,
+    gift_message: gift_message || '',
     delivery_address: delivery_address || '', delivery_landmark: delivery_landmark || '',
     delivery_location: { lat: delivery_lat || null, lng: delivery_lng || null },
     delivery_slot: null, payment_status: 'pending', payment_amount: 0,
-    // 'awaiting_payment' — decorators notified only after payment verified
     delivery_status: 'awaiting_payment', delivery_person_id: null,
     assigned_decorators: [], accepted_decorators: [], created_at: new Date(),
   }
   await db.collection('gift_orders').insertOne(giftOrder)
-  // Decorator assignment happens in /payments/verify — not here
+
+  // Decrement stock for each item
+  const stockOps = gift_items.map(item =>
+    db.collection('gifts').updateOne({ id: item.gift_id }, { $inc: { stock: -(item.quantity || 1) } })
+  )
+  await Promise.allSettled(stockOps)
+
   const { _id, ...clean } = giftOrder
   return ok(clean)
 }))
