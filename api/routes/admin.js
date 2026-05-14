@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { connectToMongo } from '../db.js'
 import { requireAdmin } from '../jwt.js'
 import { hashPwd, asyncRoute } from '../helpers.js'
+import { IMAGEKIT_PRIVATE_KEY } from '../config.js'
 
 const router = Router()
 
@@ -141,6 +142,134 @@ router.put('/admin/orders/:id', asyncRoute(async (req, res, ok, err) => {
   if (!o) return err('Order not found', 404)
   const { _id, ...clean } = o
   return ok(clean)
+}))
+
+// ── AI Gift Auto-Fill ─────────────────────────────────────────
+
+const GIFT_VISION_PROMPT = `You are a gift product analyst for an Indian e-commerce decoration and gifting platform. Analyze the uploaded gift/product image and return a JSON object with exactly these fields:
+{
+  "name": "concise product name (e.g. 'Premium Chocolate Gift Hamper', 'Red Rose Bouquet')",
+  "description": "2-3 sentence appealing product description mentioning key features and materials",
+  "category": "one of: Flowers, Cakes, Chocolates, Hampers, Toys, Home Decor, Accessories, Candles, Soft Toys, Personalized, Other",
+  "colour": "dominant hex color code (e.g. '#ff69b4')",
+  "occasion": "most suitable: Birthday, Wedding, Anniversary, Diwali, Christmas, Valentine, Housewarming, Rakhi, General",
+  "price": estimated_retail_price_in_INR_as_integer,
+  "item_count": number_of_distinct_items_visible,
+  "items": [{"name": "item name", "visual_description": "detailed visual description for image generation"}],
+  "full_visual_description": "very detailed visual description including colors, materials, textures, shapes, sizes, arrangement, packaging"
+}
+Price guide (INR): Flowers 300-2500, Cakes 400-2000, Chocolates 200-1500, Hampers 500-5000, Soft toys 300-2000, Decor 200-3000.`
+
+function buildGiftImagePrompts(analysis) {
+  const desc = analysis.full_visual_description || analysis.description || analysis.name
+  const items = analysis.items || []
+  const occasion = analysis.occasion || 'celebration'
+  let prompts = []
+  if ((analysis.item_count || 1) <= 1 || items.length <= 1) {
+    prompts = [
+      `Professional e-commerce product photo of ${desc}, front view, clean white background, studio lighting, high resolution`,
+      `Professional product photo of ${desc}, 45-degree angle view, clean white background, soft studio lighting`,
+      `Top-down flat lay product photo of ${desc}, white background, overhead birds-eye view, studio lighting`,
+      `Close-up detail macro shot of ${desc}, shallow depth of field, studio photography, showing textures`,
+      `${desc} elegantly gift-wrapped with satin ribbon and bow, professional product photo, white background`,
+      `Lifestyle product photo of ${desc} in a cozy decorated home setting, natural warm lighting`,
+      `${desc} displayed on a boutique shelf or pedestal, premium presentation, soft bokeh background`,
+      `Professional product photo of ${desc} held in hand showing scale, natural lighting`,
+      `${desc} in a festive ${occasion} themed setting with decorations, warm celebratory mood lighting`,
+    ]
+  } else {
+    const itemPrompts = items.slice(0, 5).map(it =>
+      `Professional e-commerce product photo of single isolated ${it.visual_description || it.name}, clean white background, studio lighting, centered`
+    )
+    const extras = [
+      `Top-down flat lay of all items: ${desc}, neatly organized, white background, studio lighting`,
+      `${desc} arranged as gift hamper with ribbon, professional product photo, white background`,
+      `Lifestyle photo of ${desc} on a table in a cozy room, natural warm lighting`,
+      `Close-up detail shot of ${desc}, showing quality and textures, shallow depth of field`,
+      `${desc} in a festive ${occasion} themed display, warm mood lighting`,
+    ].slice(0, 9 - itemPrompts.length)
+    prompts = [...itemPrompts, ...extras]
+  }
+  while (prompts.length < 9) prompts.push(`Professional product photo of ${desc}, clean background, studio lighting`)
+  return prompts.slice(0, 9)
+}
+
+async function ikUpload(fileOrUrl, fileName) {
+  const auth = Buffer.from(IMAGEKIT_PRIVATE_KEY + ':').toString('base64')
+  const form = new URLSearchParams()
+  form.append('file', fileOrUrl)
+  form.append('fileName', fileName)
+  form.append('folder', '/gifts')
+  try {
+    const r = await fetch('https://upload.imagekit.io/api/v1/files/upload', {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString()
+    })
+    const d = await r.json()
+    return d.url || null
+  } catch { return null }
+}
+
+router.post('/admin/gifts/ai-fill', asyncRoute(async (req, res, ok, err) => {
+  const { image_base64 } = req.body
+  if (!image_base64) return err('image_base64 required')
+  const OPENAI_KEY = process.env.OPENAI_API_KEY
+  const FAL_KEY_VAL = process.env.FAL_KEY
+  if (!OPENAI_KEY) return err('OPENAI_API_KEY not configured', 500)
+  if (!FAL_KEY_VAL) return err('FAL_KEY not configured', 500)
+  if (!IMAGEKIT_PRIVATE_KEY) return err('IMAGEKIT_PRIVATE_KEY not configured', 500)
+
+  const imgData = image_base64.startsWith('data:') ? image_base64 : `data:image/jpeg;base64,${image_base64}`
+
+  const [originalUrl, visionResp] = await Promise.all([
+    ikUpload(image_base64, `gift_orig_${Date.now()}.jpg`),
+    fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${OPENAI_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o', response_format: { type: 'json_object' }, max_tokens: 1000,
+        messages: [
+          { role: 'system', content: GIFT_VISION_PROMPT },
+          { role: 'user', content: [{ type: 'image_url', image_url: { url: imgData } }] }
+        ]
+      })
+    }).then(r => r.json())
+  ])
+
+  if (!visionResp.choices?.[0]?.message?.content) return err('AI analysis failed', 500)
+  let analysis
+  try { analysis = JSON.parse(visionResp.choices[0].message.content) } catch { return err('AI returned invalid data', 500) }
+
+  const prompts = buildGiftImagePrompts(analysis)
+  const falResults = await Promise.allSettled(
+    prompts.map(prompt =>
+      fetch('https://fal.run/fal-ai/flux/schnell', {
+        method: 'POST',
+        headers: { 'Authorization': `Key ${FAL_KEY_VAL}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, image_size: 'square_hd', num_images: 1, num_inference_steps: 4, output_format: 'jpeg' })
+      }).then(r => r.json()).then(d => d.images?.[0]?.url)
+    )
+  )
+  const falUrls = falResults.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value)
+
+  const uploadResults = await Promise.allSettled(
+    falUrls.map((url, i) => ikUpload(url, `gift_ai_${Date.now()}_${i}.jpg`))
+  )
+  const uploadedUrls = uploadResults.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value)
+
+  const images = [originalUrl, ...uploadedUrls].filter(Boolean).slice(0, 10)
+  return ok({
+    name: analysis.name || 'Untitled Gift',
+    description: analysis.description || '',
+    price: analysis.price || 0,
+    stock: 100,
+    category: analysis.category || '',
+    colour: analysis.colour || '#ff69b4',
+    occasion: analysis.occasion || '',
+    images,
+    image_url: images[0] || ''
+  })
 }))
 
 // ── Admin Gifts CRUD ──────────────────────────────────────────
