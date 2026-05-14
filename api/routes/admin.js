@@ -155,11 +155,13 @@ router.get('/admin/gifts', asyncRoute(async (req, res, ok) => {
 // POST /admin/gifts — create gift
 router.post('/admin/gifts', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { name, description, price, image_url, stock, category, colour, occasion } = req.body
+  const { name, description, price, images, image_url, stock, category, colour, occasion } = req.body
   if (!name) return err('Gift name required')
+  const imgArr = Array.isArray(images) ? images : []
   const gift = {
     id: uuidv4(), name, description: description || '',
-    price: Number(price) || 0, image_url: image_url || '',
+    price: Number(price) || 0,
+    images: imgArr, image_url: imgArr[0] || image_url || '',
     stock: Number(stock) || 0, category: category || '', colour: colour || '',
     occasion: occasion || '', active: true, is_active: true, created_at: new Date()
   }
@@ -175,6 +177,7 @@ router.put('/admin/gifts/:id', asyncRoute(async (req, res, ok, err) => {
   if (body.price !== undefined) body.price = Number(body.price)
   if (body.stock !== undefined) body.stock = Number(body.stock)
   if (body.active !== undefined) body.is_active = body.active
+  if (Array.isArray(body.images)) body.image_url = body.images[0] || ''
   body.updated_at = new Date()
   await db.collection('gifts').updateOne({ id: req.params.id }, { $set: body })
   const gift = await db.collection('gifts').findOne({ id: req.params.id })
