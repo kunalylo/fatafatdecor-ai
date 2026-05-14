@@ -38,6 +38,29 @@ router.post('/items', requireAdmin, asyncRoute(async (req, res, ok) => {
   return ok(clean)
 }))
 
+// POST /items/bulk — admin only
+router.post('/items/bulk', requireAdmin, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const { items } = req.body
+  if (!Array.isArray(items) || items.length === 0) return err('items array required')
+  const docs = items.map(body => ({
+    id: uuidv4(), name: body.name, description: body.description || '',
+    category: body.category || 'general',
+    price: Number(body.selling_price_unit || body.price || 0),
+    selling_price_unit: Number(body.selling_price_unit || body.price || 0),
+    unit_cost: Number(body.unit_cost || 0),
+    color: body.color || '', size: body.size || '',
+    image_url: body.image_url || '',
+    stock_count: Number(body.stock_count) || 0,
+    tags: body.tags || [],
+    is_rentable: body.is_rentable || false,
+    is_sellable: body.is_sellable !== false,
+    active: true, created_at: new Date(),
+  }))
+  await db.collection('items').insertMany(docs)
+  return ok(docs.map(({ _id, ...item }) => item))
+}))
+
 // PUT /items/:id — admin only
 router.put('/items/:id', requireAdmin, asyncRoute(async (req, res, ok, err) => {
   const db   = await connectToMongo()

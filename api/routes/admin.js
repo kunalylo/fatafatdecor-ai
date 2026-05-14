@@ -125,8 +125,15 @@ router.post('/admin/dp-toggle', asyncRoute(async (req, res, ok, err) => {
 
 // ── Admin Orders ───────────────────────────────────────────────
 
-// PUT /orders/:id  (admin full update)
-router.put('/orders/:id', asyncRoute(async (req, res, ok, err) => {
+// GET /admin/orders — all orders
+router.get('/admin/orders', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  const orders = await db.collection('orders').find({}).sort({ created_at: -1 }).toArray()
+  return ok(orders.map(({ _id, ...o }) => o))
+}))
+
+// PUT /admin/orders/:id  (admin full update)
+router.put('/admin/orders/:id', asyncRoute(async (req, res, ok, err) => {
   const db   = await connectToMongo()
   const body = req.body; delete body._id
   await db.collection('orders').updateOne({ id: req.params.id }, { $set: body })
