@@ -304,7 +304,7 @@ async def health():
         "fal_key_configured": bool(FAL_KEY),
         "openai_key_configured": bool(OPENAI_API_KEY),
         "image_model": "gpt-image-1 via OpenAI direct",
-        "selection_model": "gemini-flash-1-5 via fal any-llm",
+        "selection_model": "gemini-flash-1.5 via fal any-llm",
         "endpoints": ["/smart-generate", "/generate", "/analyze-decoration"],
     }
 
@@ -400,7 +400,7 @@ Respond ONLY with this exact JSON:
             fal_client.run,
             "fal-ai/any-llm",
             arguments={
-                "model": "google/gemini-flash-1-5",
+                "model": "google/gemini-flash-1.5",
                 "system_prompt": selection_system,
                 "prompt": selection_prompt,
             },
