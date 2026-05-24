@@ -4,12 +4,18 @@ import { connectToMongo } from '../db.js'
 import { requireUser } from '../jwt.js'
 import { asyncRoute } from '../helpers.js'
 import { AI_SERVICE_URL, IMAGEKIT_PRIVATE_KEY } from '../config.js'
+import { BUDGET_BRACKETS, validBudgetTuples } from '../lib/budget-brackets.js'
 
 const router = Router()
 
 const VALID_ROOM_TYPES = ['Dining Room','Living Room','Bedroom','Balcony','Garden','Hall','Office','Terrace']
-const VALID_OCCASIONS  = ['birthday','anniversary','wedding','dinner','party','baby_shower','engagement','corporate','festival','housewarming']
-const VALID_BUDGETS    = [[3000,5000],[5000,10000],[10000,15000],[15000,20000],[20000,30000],[30000,50000]]
+const VALID_OCCASIONS  = ['birthday','anniversary','wedding','dinner','party','baby_shower','engagement','corporate','festival','housewarming','new_year','store_opening']
+const VALID_BUDGETS    = validBudgetTuples()
+
+// Public endpoint: customer apps fetch the live bracket list so the UI stays in sync
+router.get('/budget-brackets', asyncRoute(async (req, res, ok) => {
+  return ok({ brackets: BUDGET_BRACKETS })
+}))
 
 async function uploadToImageKit(base64OrUrl, designId) {
   try {

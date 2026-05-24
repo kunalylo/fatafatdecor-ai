@@ -9,6 +9,7 @@ import { requireAdmin } from '../jwt.js'
 import { asyncRoute } from '../helpers.js'
 import { AI_SERVICE_URL, IMAGEKIT_PRIVATE_KEY } from '../config.js'
 import { parseFilename } from '../lib/filename-parser.js'
+import { BUDGET_BRACKETS, bracketForPrice } from '../lib/budget-brackets.js'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } })
@@ -272,6 +273,7 @@ router.post('/admin/references/upload', upload.single('file'), asyncRoute(async 
   if (!basePrice) return err('Could not determine base price from filename. Pass base_price in form data.', 400)
 
   const referenceId = uuidv4()
+  const bracket = bracketForPrice(basePrice)
 
   // Upload to ImageKit
   let ikData
@@ -289,6 +291,8 @@ router.post('/admin/references/upload', upload.single('file'), asyncRoute(async 
     imagekit_file_id: ikData.file_id || null,
     raw_filename:  originalName,
     base_price:    basePrice,
+    budget_bracket: bracket.id,
+    budget_bracket_label: bracket.label,
     occasion,
     theme,
     setup_type:    setupType,
@@ -349,12 +353,13 @@ router.post('/admin/references/:id/rerun', asyncRoute(async (req, res, ok, err) 
 // GET /admin/references — list with filters
 router.get('/admin/references', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
-  const { occasion, status, theme, page = 1, limit = 30, sort = 'recent' } = req.query
+  const { occasion, status, theme, bracket, page = 1, limit = 30, sort = 'recent' } = req.query
 
   const filter = {}
   if (occasion) filter.occasion = occasion
   if (status)   filter.status   = status
   if (theme)    filter.theme    = { $regex: theme, $options: 'i' }
+  if (bracket)  filter.budget_bracket = bracket
 
   const sortMap = {
     recent:    { created_at: -1 },
@@ -403,6 +408,13 @@ router.put('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
   delete updates._id
   delete updates.id
   delete updates.created_at
+
+  // If base_price changed, re-classify bracket
+  if (updates.base_price !== undefined) {
+    const b = bracketForPrice(updates.base_price)
+    updates.budget_bracket       = b.id
+    updates.budget_bracket_label = b.label
+  }
 
   // If detected_items changed, recompute totals
   if (Array.isArray(updates.detected_items)) {
@@ -502,6 +514,91 @@ router.delete('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
   const result = await db.collection('reference_designs').findOneAndDelete({ id: req.params.id })
   if (!result) return err('Reference not found', 404)
   return ok({ deleted: true, id: req.params.id })
+}))
+
+// POST /admin/references/backfill-brackets — one-shot to tag pre-bracket references
+router.post('/admin/references/backfill-brackets', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  const refs = await db.collection('reference_designs')
+    .find({ $or: [{ budget_bracket: { $exists: false } }, { budget_bracket: null }] })
+    .toArray()
+
+  let updated = 0
+  for (const r of refs) {
+    const b = bracketForPrice(r.base_price)
+    await db.collection('reference_designs').updateOne(
+      { id: r.id },
+      { $set: { budget_bracket: b.id, budget_bracket_label: b.label } },
+    )
+    updated++
+  }
+  return ok({ updated })
+}))
+
+// GET /admin/references/budget-coverage — how many references per bracket, occasion gaps
+router.get('/admin/references/budget-coverage', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  const refs = await db.collection('reference_designs')
+    .find({ active: true })
+    .project({ base_price: 1, occasion: 1, margin_percent: 1 })
+    .toArray()
+
+  // Build coverage matrix: bracket × occasion → count
+  const occasions = [
+    'birthday','anniversary','wedding','baby_shower','engagement',
+    'corporate','festival','housewarming','new_year','store_opening',
+    'party','dinner',
+  ]
+
+  const matrix = {}            // matrix[bracketId][occasion] = count
+  const bracketTotals = {}     // bracketTotals[bracketId] = { count, avg_margin }
+  const occasionTotals = {}    // occasionTotals[occasion]  = count
+
+  for (const b of BUDGET_BRACKETS) {
+    matrix[b.id] = {}
+    for (const o of occasions) matrix[b.id][o] = 0
+    bracketTotals[b.id] = { count: 0, margin_sum: 0 }
+  }
+  for (const o of occasions) occasionTotals[o] = 0
+
+  for (const r of refs) {
+    const b = bracketForPrice(r.base_price)
+    const occ = (r.occasion || '').toLowerCase()
+    if (matrix[b.id] && occasions.includes(occ)) {
+      matrix[b.id][occ]            += 1
+      occasionTotals[occ]          += 1
+    }
+    bracketTotals[b.id].count      += 1
+    bracketTotals[b.id].margin_sum += Number(r.margin_percent) || 0
+  }
+
+  const brackets = BUDGET_BRACKETS.map(b => {
+    const t = bracketTotals[b.id]
+    return {
+      ...b,
+      count: t.count,
+      avg_margin: t.count > 0 ? Math.round((t.margin_sum / t.count) * 10) / 10 : 0,
+      by_occasion: matrix[b.id],
+    }
+  })
+
+  // Identify gaps: bracket + occasion pairs with zero references
+  const gaps = []
+  for (const b of BUDGET_BRACKETS) {
+    for (const o of occasions) {
+      if (matrix[b.id][o] === 0 && occasionTotals[o] > 0) {
+        gaps.push({ bracket: b.id, bracket_label: b.label, occasion: o })
+      }
+    }
+  }
+
+  return ok({
+    total_references: refs.length,
+    brackets,
+    occasions,
+    occasion_totals: occasionTotals,
+    gaps,
+  })
 }))
 
 // GET /admin/references/sku-search — lightweight SKU search for the "Add Item" picker
