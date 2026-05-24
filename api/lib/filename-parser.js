@@ -54,6 +54,14 @@ const TOOL_KEYWORDS = [
   'premium', 'luxury', 'budget', 'simple', 'elegant',
 ]
 
+// Words to strip while cleaning a segment to derive a theme
+const THEME_STOP_WORDS = [
+  'decoration', 'decorations', 'decor',
+  'event', 'celebration', 'celebrations',
+  'happy', 'beautiful', 'lovely', 'amazing',
+  'a', 'an', 'the', 'and', 'with', 'for', 'of',
+]
+
 function stripExtension(filename) {
   return filename.replace(/\.(jpg|jpeg|png|webp|gif|bmp)$/i, '')
 }
@@ -95,6 +103,59 @@ function extractTags(text) {
 }
 
 /**
+ * Clean a single filename segment into a usable theme phrase.
+ * Strips "theme " prefix, generic noise words, occasion/setup keywords if needed.
+ */
+function cleanSegmentForTheme(segment) {
+  let s = String(segment || '').toLowerCase()
+    .replace(/^\s*theme\s+/, '')   // "theme birthday party" → "birthday party"
+    .replace(/[^a-z0-9\s]/g, ' ')  // strip punctuation
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  // Drop generic noise words but keep occasion/style words
+  const words = s.split(' ').filter(w => w.length >= 3 && !THEME_STOP_WORDS.includes(w))
+  return words.join(' ').trim()
+}
+
+/**
+ * Derive a theme from filename parts.
+ * Priority:
+ *   1. Explicit colors found anywhere in the filename
+ *   2. Plus the first meaningful descriptive segment (e.g. "birthday party")
+ *   3. Fallback: occasion + setup type ("birthday indoor")
+ *   4. Fallback: "decoration"
+ */
+function deriveTheme(parts, colors, occasion, setupType) {
+  const pieces = []
+
+  if (colors.length > 0) {
+    pieces.push(colors.join(' and '))
+  }
+
+  // First descriptive segment that isn't pure price
+  for (const p of parts) {
+    if (extractPrice(p) && p.replace(/[^a-z0-9]/gi, '').match(/^rs?\d+$/i)) continue
+    const cleaned = cleanSegmentForTheme(p)
+    if (cleaned.length >= 3 && !pieces.some(x => x.includes(cleaned))) {
+      pieces.push(cleaned)
+      break
+    }
+  }
+
+  if (pieces.length === 0) {
+    if (occasion) {
+      const occWord = occasion.replace(/_/g, ' ')
+      pieces.push(setupType ? `${setupType} ${occWord}` : occWord)
+    } else {
+      pieces.push('decoration')
+    }
+  }
+
+  return pieces.join(' — ').replace(/\s+/g, ' ').trim()
+}
+
+/**
  * Parse a reference design filename.
  *
  * @param {string} filename - e.g. "Rs 9500 ; new year ; champagne theme ; indoor.jpg"
@@ -125,8 +186,9 @@ export function parseFilename(filename) {
   const room_hint  = findInText(fullText, ROOM_KEYWORDS)
   const colors     = findColors(fullText)
 
-  // Theme = combine colors found
-  const theme = colors.length > 0 ? colors.join(' and ') : null
+  // Always derive a usable theme — colors first, then descriptive segments,
+  // finally a sensible fallback from occasion + setup.
+  const theme = deriveTheme(parts, colors, occasion, setup_type)
 
   // Tags = all useful words minus the structured ones
   const tags = extractTags(fullText)

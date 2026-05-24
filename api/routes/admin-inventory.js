@@ -61,7 +61,7 @@ router.get('/admin/inventory/stats', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   const col = db.collection('master_inventory')
 
-  const [total, byCategory, byColor, byFinish, lowStock] = await Promise.all([
+  const [total, byCategory, byColor, byFinish] = await Promise.all([
     col.countDocuments({ active: true }),
     col.aggregate([
       { $match: { active: true } },
@@ -79,7 +79,6 @@ router.get('/admin/inventory/stats', asyncRoute(async (req, res, ok) => {
       { $group: { _id: '$finish', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
     ]).toArray(),
-    col.countDocuments({ active: true, $expr: { $lte: ['$stock_count', '$reorder_threshold'] } }),
   ])
 
   return ok({
@@ -87,7 +86,6 @@ router.get('/admin/inventory/stats', asyncRoute(async (req, res, ok) => {
     categories: byCategory.map(c => ({ name: c._id, count: c.count })),
     colors:     byColor.map(c => ({ name: c._id, count: c.count })),
     finishes:   byFinish.map(c => ({ name: c._id, count: c.count })),
-    low_stock_count: lowStock,
   })
 }))
 
@@ -169,26 +167,6 @@ router.put('/admin/inventory/items/:id', asyncRoute(async (req, res, ok, err) =>
   const result = await db.collection('master_inventory').findOneAndUpdate(
     { $or: [{ id: req.params.id }, { sku_code: req.params.id }] },
     { $set: updates },
-    { returnDocument: 'after' },
-  )
-  if (!result) return err('Item not found', 404)
-  const { _id, ...clean } = result
-  return ok(clean)
-}))
-
-// ── PUT /admin/inventory/items/:id/stock — adjust stock ────
-router.put('/admin/inventory/items/:id/stock', asyncRoute(async (req, res, ok, err) => {
-  const db = await connectToMongo()
-  const { delta, set } = req.body
-  if (delta === undefined && set === undefined) return err('Provide delta or set')
-
-  const update = set !== undefined
-    ? { $set: { stock_count: Math.max(0, Number(set)), updated_at: new Date() } }
-    : { $inc: { stock_count: Number(delta) }, $set: { updated_at: new Date() } }
-
-  const result = await db.collection('master_inventory').findOneAndUpdate(
-    { $or: [{ id: req.params.id }, { sku_code: req.params.id }] },
-    update,
     { returnDocument: 'after' },
   )
   if (!result) return err('Item not found', 404)
