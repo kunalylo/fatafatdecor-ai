@@ -13,6 +13,8 @@ import deliveryRoutes  from './api/routes/delivery.js'
 import decoratorRoutes from './api/routes/decorators.js'
 import giftRoutes      from './api/routes/gifts.js'
 import adminRoutes     from './api/routes/admin.js'
+import adminInventoryRoutes  from './api/routes/admin-inventory.js'
+import adminReferenceRoutes  from './api/routes/admin-references.js'
 import userRoutes      from './api/routes/user.js'
 import imagekitRoutes  from './api/routes/imagekit.js'
 import seedRoutes      from './api/routes/seed.js'
@@ -69,6 +71,8 @@ app.use('/api', decoratorRoutes)
 app.use('/api', giftRoutes)
 app.use('/api', userRoutes)
 app.use('/api', adminRoutes)
+app.use('/api', adminInventoryRoutes)
+app.use('/api', adminReferenceRoutes)
 app.use('/api', imagekitRoutes)
 app.use('/api', seedRoutes)
 

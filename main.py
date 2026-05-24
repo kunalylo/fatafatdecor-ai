@@ -67,6 +67,35 @@ class AnalyzeRequest(BaseModel):
     name: str = ""
 
 
+class DetectItemsRequest(BaseModel):
+    image_url: Optional[str] = None
+    image_base64: Optional[str] = None
+
+
+class SkuCandidate(BaseModel):
+    sku_code: str
+    category: str = ""
+    subcategory: str = ""
+    color: str = ""
+    finish: str = ""
+    size_inches: float = 0
+    shape: str = ""
+    per_unit_cost: float = 0
+    selling_price_per_unit: float = 0
+
+
+class MatchSkusRequest(BaseModel):
+    detection: dict       # { type, color, finish, size, shape, quantity, ... }
+    candidates: List[SkuCandidate] = []
+
+
+class GenerateTagsRequest(BaseModel):
+    occasion: str = ""
+    theme: str = ""
+    setup_type: str = ""
+    detected_items_summary: str = ""
+
+
 # ── Helpers ──────────────────────────────────────────────────
 
 def parse_json_safe(text: str) -> dict:
@@ -305,7 +334,10 @@ async def health():
         "openai_key_configured": bool(OPENAI_API_KEY),
         "image_model": "gpt-image-1 via OpenAI direct",
         "selection_model": "gemini-flash-1.5 via fal any-llm",
-        "endpoints": ["/smart-generate", "/generate", "/analyze-decoration"],
+        "endpoints": [
+            "/smart-generate", "/generate", "/analyze-decoration",
+            "/detect-items", "/match-skus", "/generate-tags",
+        ],
     }
 
 
@@ -588,3 +620,240 @@ Respond ONLY with valid JSON (no markdown):
     except Exception as e:
         print(f"[analyze-decoration] error:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# NEW: Reference design pipeline endpoints
+# ============================================================
+
+DETECT_SYSTEM_PROMPT = (
+    "You are an expert event-decoration analyst for FatafatDecor. "
+    "Look at the decoration photo and identify EVERY visible balloon, foil, prop, "
+    "backdrop, light and decorative item.\n\n"
+    "Counting rules:\n"
+    "• Estimate quantities carefully (count clusters: small ~10-20, medium ~30-50, large ~80-150).\n"
+    "• Distinguish finish: Matte, Chrome, Pastel, Metallic, Pearl, Confetti, Foil/Mylar, Holographic.\n"
+    "• Estimate size in inches (typical sizes: 5, 10, 12, 18, 24, 36, 40 inch).\n"
+    "• For numbers/letters, record the actual character (e.g., \"5\", \"A\").\n"
+    "• Exclude existing furniture/walls — only count added decorations.\n"
+    "• Use color names commonly used in Indian decor: Pink, Gold, Silver, Rose Gold, "
+    "Black, White, Red, Blue, Pastel Pink, Champagne Gold, etc.\n\n"
+    "Return strict JSON only — no markdown, no commentary."
+)
+
+DETECT_USER_PROMPT = """Analyze this decoration photo. Return JSON in this exact shape:
+
+{
+  "is_screenshot": false,
+  "is_decoration_photo": true,
+  "items": [
+    {
+      "type": "latex_balloon" | "foil_balloon" | "backdrop" | "light" | "prop" | "flower" | "other",
+      "color": "Pink",
+      "finish": "Chrome",
+      "size_inches": 12,
+      "shape": "round" | "heart" | "star" | "number" | "letter" | "bottle" | "other",
+      "character": "5",
+      "subtype": "foil_curtain" | "led_curtain" | "fairy_lights" | "...",
+      "quantity": 200,
+      "confidence": "high" | "medium" | "low",
+      "notes": "optional description"
+    }
+  ],
+  "color_palette": ["pink", "gold", "white"],
+  "dominant_mood": "vibrant, premium, romantic, ...",
+  "setup_complexity": "easy" | "medium" | "hard",
+  "estimated_setup_minutes": 60
+}
+
+Be thorough. Every visible balloon must be counted. Use confidence "low" if unsure."""
+
+
+async def _fetch_image_bytes_for_vision(image_url: Optional[str], image_base64: Optional[str]) -> bytes:
+    """Fetch + lightly compress image to JPEG bytes for gpt-4o vision."""
+    if image_base64:
+        data = image_base64
+        if "," in data:
+            data = data.split(",", 1)[1]
+        raw = base64.b64decode(data)
+    elif image_url:
+        import requests
+        r = await asyncio.to_thread(requests.get, image_url, timeout=30)
+        r.raise_for_status()
+        raw = r.content
+    else:
+        raise HTTPException(status_code=400, detail="Provide image_url or image_base64")
+
+    from PIL import Image
+    img = Image.open(io.BytesIO(raw)).convert("RGB")
+    w, h = img.size
+    if max(w, h) > 1280:
+        scale = 1280 / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90, optimize=True)
+    return buf.getvalue()
+
+
+@app.post("/detect-items")
+async def detect_items(req: DetectItemsRequest):
+    """
+    Use gpt-4o vision to detect every balloon, prop, light, backdrop in a decoration photo.
+    Called once per reference upload — result is cached in the reference doc.
+    """
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+
+    try:
+        jpeg_bytes = await _fetch_image_bytes_for_vision(req.image_url, req.image_base64)
+        b64 = base64.b64encode(jpeg_bytes).decode("utf-8")
+        data_url = f"data:image/jpeg;base64,{b64}"
+
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": DETECT_SYSTEM_PROMPT},
+                {"role": "user", "content": [
+                    {"type": "text", "text": DETECT_USER_PROMPT},
+                    {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}},
+                ]},
+            ],
+            max_tokens=2500,
+            temperature=0.2,
+        )
+
+        raw = response.choices[0].message.content
+        parsed = parse_json_safe(raw)
+
+        return {
+            "success": True,
+            "is_screenshot":     parsed.get("is_screenshot", False),
+            "is_decoration_photo": parsed.get("is_decoration_photo", True),
+            "items":              parsed.get("items", []),
+            "color_palette":      parsed.get("color_palette", []),
+            "dominant_mood":      parsed.get("dominant_mood", ""),
+            "setup_complexity":   parsed.get("setup_complexity", "medium"),
+            "estimated_setup_minutes": parsed.get("estimated_setup_minutes", 60),
+        }
+    except (ValueError, json_lib.JSONDecodeError) as e:
+        print(f"[detect-items] JSON parse error: {e}")
+        return {"success": False, "error": "Failed to parse vision response"}
+    except Exception as e:
+        print(f"[detect-items] error:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/match-skus")
+async def match_skus(req: MatchSkusRequest):
+    """
+    Given a single detected item + candidate SKUs from master_inventory,
+    use Gemini to pick the best match with reasoning.
+    """
+    import fal_client
+
+    if not FAL_KEY:
+        raise HTTPException(status_code=500, detail="FAL_KEY not configured")
+
+    if not req.candidates:
+        return {"success": False, "matched_sku_code": None, "confidence": "low", "reasoning": "no candidates provided"}
+
+    # Slim down candidates for the prompt
+    slim = [
+        {
+            "sku_code": c.sku_code,
+            "category": c.category,
+            "subcategory": c.subcategory,
+            "color": c.color,
+            "finish": c.finish,
+            "size": c.size_inches,
+            "shape": c.shape,
+            "cost": c.per_unit_cost,
+        }
+        for c in req.candidates[:30]  # cap to keep prompt small
+    ]
+
+    system = (
+        "You are a decoration inventory matcher. "
+        "Given a detected balloon/prop and a list of candidate SKUs, pick the SINGLE best match. "
+        "Match priority: color > finish > size > shape > category. "
+        "Return strict JSON only."
+    )
+    user = f"""Detected item:
+{json_lib.dumps(req.detection)}
+
+Candidate SKUs:
+{json_lib.dumps(slim)}
+
+Return JSON:
+{{
+  "matched_sku_code": "exact_sku_code_or_null",
+  "confidence": "high" | "medium" | "low",
+  "reasoning": "one short sentence"
+}}"""
+
+    try:
+        result = await asyncio.to_thread(
+            fal_client.run,
+            "fal-ai/any-llm",
+            arguments={
+                "model": "google/gemini-flash-1-5",
+                "system_prompt": system,
+                "prompt": user,
+            },
+        )
+        parsed = parse_json_safe(result["output"])
+        return {
+            "success": True,
+            "matched_sku_code": parsed.get("matched_sku_code"),
+            "confidence":       parsed.get("confidence", "low"),
+            "reasoning":        parsed.get("reasoning", ""),
+        }
+    except Exception as e:
+        print(f"[match-skus] error:\n{traceback.format_exc()}")
+        return {"success": False, "matched_sku_code": None, "confidence": "low", "reasoning": str(e)}
+
+
+@app.post("/generate-tags")
+async def generate_tags(req: GenerateTagsRequest):
+    """
+    Use Gemini to generate 8-12 search-friendly tags for a reference design.
+    """
+    import fal_client
+
+    if not FAL_KEY:
+        return {"success": False, "tags": []}
+
+    system = "You generate concise search tags for event decoration designs. Output strict JSON only."
+    user = f"""Decoration:
+Occasion: {req.occasion}
+Theme: {req.theme}
+Setup: {req.setup_type}
+Items summary: {req.detected_items_summary}
+
+Generate 8-12 lowercase search tags (single words or short phrases with underscores).
+Include: occasion variants, color tags, style/mood tags, audience tags (kids/adults/girls/boys), setup tags.
+
+Return JSON:
+{{
+  "tags": ["pink", "gold", "girls_birthday", "balloon_arch", "indoor", "premium"]
+}}"""
+
+    try:
+        result = await asyncio.to_thread(
+            fal_client.run,
+            "fal-ai/any-llm",
+            arguments={
+                "model": "google/gemini-flash-1-5",
+                "system_prompt": system,
+                "prompt": user,
+            },
+        )
+        parsed = parse_json_safe(result["output"])
+        return {"success": True, "tags": parsed.get("tags", [])}
+    except Exception as e:
+        print(f"[generate-tags] error: {e}")
+        return {"success": False, "tags": []}
