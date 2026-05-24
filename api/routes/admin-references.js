@@ -392,6 +392,149 @@ router.get('/admin/references', asyncRoute(async (req, res, ok) => {
   })
 }))
 
+// ── STATIC-PATH ROUTES MUST BE BEFORE /:id ──────────────────────
+// (Express matches in order — /:id swallows literal paths otherwise.)
+
+// POST /admin/references/backfill-brackets — one-shot to tag pre-bracket references
+router.post('/admin/references/backfill-brackets', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  const refs = await db.collection('reference_designs')
+    .find({ $or: [{ budget_bracket: { $exists: false } }, { budget_bracket: null }] })
+    .toArray()
+
+  let updated = 0
+  for (const r of refs) {
+    const b = bracketForPrice(r.base_price)
+    await db.collection('reference_designs').updateOne(
+      { id: r.id },
+      { $set: { budget_bracket: b.id, budget_bracket_label: b.label } },
+    )
+    updated++
+  }
+  return ok({ updated })
+}))
+
+// GET /admin/references/budget-coverage — bracket × occasion matrix + gap detector.
+// Auto-backfills any references missing budget_bracket as a side effect so the matrix
+// is always correct without admin having to hit the migration endpoint manually.
+router.get('/admin/references/budget-coverage', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+
+  // Auto-backfill any references missing budget_bracket
+  const missing = await db.collection('reference_designs')
+    .find({ $or: [{ budget_bracket: { $exists: false } }, { budget_bracket: null }] })
+    .toArray()
+  for (const r of missing) {
+    const b = bracketForPrice(r.base_price)
+    await db.collection('reference_designs').updateOne(
+      { id: r.id },
+      { $set: { budget_bracket: b.id, budget_bracket_label: b.label } },
+    )
+  }
+
+  const refs = await db.collection('reference_designs')
+    .find({ active: true })
+    .project({ base_price: 1, occasion: 1, margin_percent: 1, budget_bracket: 1 })
+    .toArray()
+
+  // Build coverage matrix: bracket × occasion → count
+  const occasions = [
+    'birthday','anniversary','wedding','baby_shower','engagement',
+    'corporate','festival','housewarming','new_year','store_opening',
+    'party','dinner',
+  ]
+
+  const matrix = {}            // matrix[bracketId][occasion] = count
+  const bracketTotals = {}     // bracketTotals[bracketId] = { count, margin_sum }
+  const occasionTotals = {}    // occasionTotals[occasion]  = count
+
+  for (const b of BUDGET_BRACKETS) {
+    matrix[b.id] = {}
+    for (const o of occasions) matrix[b.id][o] = 0
+    bracketTotals[b.id] = { count: 0, margin_sum: 0 }
+  }
+  for (const o of occasions) occasionTotals[o] = 0
+
+  for (const r of refs) {
+    const b = bracketForPrice(r.base_price)
+    const occ = (r.occasion || '').toLowerCase()
+    if (matrix[b.id] && occasions.includes(occ)) {
+      matrix[b.id][occ]            += 1
+      occasionTotals[occ]          += 1
+    }
+    bracketTotals[b.id].count      += 1
+    bracketTotals[b.id].margin_sum += Number(r.margin_percent) || 0
+  }
+
+  const brackets = BUDGET_BRACKETS.map(b => {
+    const t = bracketTotals[b.id]
+    return {
+      ...b,
+      count: t.count,
+      avg_margin: t.count > 0 ? Math.round((t.margin_sum / t.count) * 10) / 10 : 0,
+      by_occasion: matrix[b.id],
+    }
+  })
+
+  // Identify gaps: bracket + occasion pairs with zero references
+  const gaps = []
+  for (const b of BUDGET_BRACKETS) {
+    for (const o of occasions) {
+      if (matrix[b.id][o] === 0 && occasionTotals[o] > 0) {
+        gaps.push({ bracket: b.id, bracket_label: b.label, occasion: o })
+      }
+    }
+  }
+
+  return ok({
+    total_references: refs.length,
+    backfilled: missing.length,
+    brackets,
+    occasions,
+    occasion_totals: occasionTotals,
+    gaps,
+  })
+}))
+
+// GET /admin/references/sku-search — lightweight SKU search for the "Add Item" picker
+router.get('/admin/references/sku-search', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  const { q = '', category, color, finish, limit = 30 } = req.query
+
+  const filter = { active: true }
+  if (category) filter.category = category
+  if (color)    filter.color = { $regex: `^${color}$`, $options: 'i' }
+  if (finish)   filter.finish = { $regex: finish, $options: 'i' }
+  if (q) {
+    filter.$or = [
+      { sku_code:         { $regex: q, $options: 'i' } },
+      { subcategory:      { $regex: q, $options: 'i' } },
+      { color:            { $regex: q, $options: 'i' } },
+      { image_search_ref: { $regex: q, $options: 'i' } },
+    ]
+  }
+
+  const items = await db.collection('master_inventory')
+    .find(filter)
+    .limit(Math.min(100, Number(limit) || 30))
+    .toArray()
+
+  return ok({
+    items: items.map(({ _id, ...i }) => ({
+      sku_code: i.sku_code,
+      id: i.id,
+      name: [i.color, i.finish, i.subcategory, i.size_inches ? `${i.size_inches}"` : ''].filter(Boolean).join(' '),
+      category: i.category,
+      subcategory: i.subcategory,
+      color: i.color,
+      finish: i.finish,
+      size_inches: i.size_inches,
+      per_unit_cost: i.per_unit_cost,
+      selling_price_per_unit: i.selling_price_per_unit,
+    })),
+  })
+}))
+
 // GET /admin/references/:id
 router.get('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
@@ -514,130 +657,6 @@ router.delete('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
   const result = await db.collection('reference_designs').findOneAndDelete({ id: req.params.id })
   if (!result) return err('Reference not found', 404)
   return ok({ deleted: true, id: req.params.id })
-}))
-
-// POST /admin/references/backfill-brackets — one-shot to tag pre-bracket references
-router.post('/admin/references/backfill-brackets', asyncRoute(async (req, res, ok) => {
-  const db = await connectToMongo()
-  const refs = await db.collection('reference_designs')
-    .find({ $or: [{ budget_bracket: { $exists: false } }, { budget_bracket: null }] })
-    .toArray()
-
-  let updated = 0
-  for (const r of refs) {
-    const b = bracketForPrice(r.base_price)
-    await db.collection('reference_designs').updateOne(
-      { id: r.id },
-      { $set: { budget_bracket: b.id, budget_bracket_label: b.label } },
-    )
-    updated++
-  }
-  return ok({ updated })
-}))
-
-// GET /admin/references/budget-coverage — how many references per bracket, occasion gaps
-router.get('/admin/references/budget-coverage', asyncRoute(async (req, res, ok) => {
-  const db = await connectToMongo()
-  const refs = await db.collection('reference_designs')
-    .find({ active: true })
-    .project({ base_price: 1, occasion: 1, margin_percent: 1 })
-    .toArray()
-
-  // Build coverage matrix: bracket × occasion → count
-  const occasions = [
-    'birthday','anniversary','wedding','baby_shower','engagement',
-    'corporate','festival','housewarming','new_year','store_opening',
-    'party','dinner',
-  ]
-
-  const matrix = {}            // matrix[bracketId][occasion] = count
-  const bracketTotals = {}     // bracketTotals[bracketId] = { count, avg_margin }
-  const occasionTotals = {}    // occasionTotals[occasion]  = count
-
-  for (const b of BUDGET_BRACKETS) {
-    matrix[b.id] = {}
-    for (const o of occasions) matrix[b.id][o] = 0
-    bracketTotals[b.id] = { count: 0, margin_sum: 0 }
-  }
-  for (const o of occasions) occasionTotals[o] = 0
-
-  for (const r of refs) {
-    const b = bracketForPrice(r.base_price)
-    const occ = (r.occasion || '').toLowerCase()
-    if (matrix[b.id] && occasions.includes(occ)) {
-      matrix[b.id][occ]            += 1
-      occasionTotals[occ]          += 1
-    }
-    bracketTotals[b.id].count      += 1
-    bracketTotals[b.id].margin_sum += Number(r.margin_percent) || 0
-  }
-
-  const brackets = BUDGET_BRACKETS.map(b => {
-    const t = bracketTotals[b.id]
-    return {
-      ...b,
-      count: t.count,
-      avg_margin: t.count > 0 ? Math.round((t.margin_sum / t.count) * 10) / 10 : 0,
-      by_occasion: matrix[b.id],
-    }
-  })
-
-  // Identify gaps: bracket + occasion pairs with zero references
-  const gaps = []
-  for (const b of BUDGET_BRACKETS) {
-    for (const o of occasions) {
-      if (matrix[b.id][o] === 0 && occasionTotals[o] > 0) {
-        gaps.push({ bracket: b.id, bracket_label: b.label, occasion: o })
-      }
-    }
-  }
-
-  return ok({
-    total_references: refs.length,
-    brackets,
-    occasions,
-    occasion_totals: occasionTotals,
-    gaps,
-  })
-}))
-
-// GET /admin/references/sku-search — lightweight SKU search for the "Add Item" picker
-router.get('/admin/references/sku-search', asyncRoute(async (req, res, ok) => {
-  const db = await connectToMongo()
-  const { q = '', category, color, finish, limit = 30 } = req.query
-
-  const filter = { active: true }
-  if (category) filter.category = category
-  if (color)    filter.color = { $regex: `^${color}$`, $options: 'i' }
-  if (finish)   filter.finish = { $regex: finish, $options: 'i' }
-  if (q) {
-    filter.$or = [
-      { sku_code:         { $regex: q, $options: 'i' } },
-      { subcategory:      { $regex: q, $options: 'i' } },
-      { color:            { $regex: q, $options: 'i' } },
-      { image_search_ref: { $regex: q, $options: 'i' } },
-    ]
-  }
-
-  const items = await db.collection('master_inventory')
-    .find(filter)
-    .limit(Math.min(100, Number(limit) || 30))
-    .toArray()
-
-  return ok({
-    items: items.map(({ _id, ...i }) => ({
-      sku_code: i.sku_code,
-      id: i.id,
-      name: [i.color, i.finish, i.subcategory, i.size_inches ? `${i.size_inches}"` : ''].filter(Boolean).join(' '),
-      category: i.category,
-      subcategory: i.subcategory,
-      color: i.color,
-      finish: i.finish,
-      size_inches: i.size_inches,
-      per_unit_cost: i.per_unit_cost,
-      selling_price_per_unit: i.selling_price_per_unit,
-    })),
-  })
 }))
 
 // GET /admin/references/stats — summary for dashboard
