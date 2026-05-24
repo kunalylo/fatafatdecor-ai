@@ -504,6 +504,45 @@ router.delete('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
   return ok({ deleted: true, id: req.params.id })
 }))
 
+// GET /admin/references/sku-search — lightweight SKU search for the "Add Item" picker
+router.get('/admin/references/sku-search', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  const { q = '', category, color, finish, limit = 30 } = req.query
+
+  const filter = { active: true }
+  if (category) filter.category = category
+  if (color)    filter.color = { $regex: `^${color}$`, $options: 'i' }
+  if (finish)   filter.finish = { $regex: finish, $options: 'i' }
+  if (q) {
+    filter.$or = [
+      { sku_code:         { $regex: q, $options: 'i' } },
+      { subcategory:      { $regex: q, $options: 'i' } },
+      { color:            { $regex: q, $options: 'i' } },
+      { image_search_ref: { $regex: q, $options: 'i' } },
+    ]
+  }
+
+  const items = await db.collection('master_inventory')
+    .find(filter)
+    .limit(Math.min(100, Number(limit) || 30))
+    .toArray()
+
+  return ok({
+    items: items.map(({ _id, ...i }) => ({
+      sku_code: i.sku_code,
+      id: i.id,
+      name: [i.color, i.finish, i.subcategory, i.size_inches ? `${i.size_inches}"` : ''].filter(Boolean).join(' '),
+      category: i.category,
+      subcategory: i.subcategory,
+      color: i.color,
+      finish: i.finish,
+      size_inches: i.size_inches,
+      per_unit_cost: i.per_unit_cost,
+      selling_price_per_unit: i.selling_price_per_unit,
+    })),
+  })
+}))
+
 // GET /admin/references/stats — summary for dashboard
 router.get('/admin/references-stats', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()

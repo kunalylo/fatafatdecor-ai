@@ -629,19 +629,43 @@ Respond ONLY with valid JSON (no markdown):
 DETECT_SYSTEM_PROMPT = (
     "You are an expert event-decoration analyst for FatafatDecor. "
     "Look at the decoration photo and identify EVERY visible balloon, foil, prop, "
-    "backdrop, light and decorative item.\n\n"
-    "Counting rules:\n"
-    "• Estimate quantities carefully (count clusters: small ~10-20, medium ~30-50, large ~80-150).\n"
-    "• Distinguish finish: Matte, Chrome, Pastel, Metallic, Pearl, Confetti, Foil/Mylar, Holographic.\n"
-    "• Estimate size in inches (typical sizes: 5, 10, 12, 18, 24, 36, 40 inch).\n"
-    "• For numbers/letters, record the actual character (e.g., \"5\", \"A\").\n"
-    "• Exclude existing furniture/walls — only count added decorations.\n"
-    "• Use color names commonly used in Indian decor: Pink, Gold, Silver, Rose Gold, "
-    "Black, White, Red, Blue, Pastel Pink, Champagne Gold, etc.\n\n"
-    "Return strict JSON only — no markdown, no commentary."
+    "backdrop, light and decorative item — be GENEROUS with counts, not conservative. "
+    "Decoration photos typically have HUNDREDS of balloons, not dozens.\n\n"
+    "COUNTING RULES (be aggressive — undercounting is the #1 mistake):\n"
+    "• A balloon garland or arch typically contains 100-300 balloons.\n"
+    "• A small visible cluster of balloons = at least 20-30 balloons.\n"
+    "• A medium cluster (covers ~half a wall) = 50-100 balloons.\n"
+    "• A large/dense cluster (covers a whole wall or full garland) = 150-300+ balloons.\n"
+    "• Balloon walls covering an entire wall = 200-500 balloons.\n"
+    "• ALWAYS round UP for clusters — if you think 40, say 60. If 100, say 150.\n"
+    "• Split a multi-color cluster into separate entries by color+size+finish.\n"
+    "• Within a single garland, balloons come in MULTIPLE sizes (5\", 10\", 12\", 18\") —\n"
+    "  list each size as a separate entry with its own estimated quantity.\n\n"
+    "SHAPE DISTINCTION (critical):\n"
+    "• 'number' = digit 0-9 (record character e.g. '5')\n"
+    "• 'letter' = A-Z (record character)\n"
+    "• 'bottle' = champagne / wine / beer bottle shape (large foil)\n"
+    "• 'heart' = heart shape\n"
+    "• 'star' = star shape\n"
+    "• 'round' = standard sphere balloon\n"
+    "• 'other' = anything else (cake, crown, butterfly, etc.)\n\n"
+    "FINISH DISTINCTION:\n"
+    "• Matte = soft non-shiny\n"
+    "• Chrome = highly reflective shiny metallic\n"
+    "• Metallic = shimmery but less mirror-like than Chrome\n"
+    "• Pearl = soft pearlescent sheen\n"
+    "• Pastel = soft muted color\n"
+    "• Confetti = transparent latex with confetti inside\n"
+    "• Foil = mylar/foil material (usually for shapes, numbers, letters)\n"
+    "• Holographic = iridescent rainbow shimmer\n\n"
+    "COLOR: use specific names — White, Ivory, Cream, Champagne Gold, Gold, Rose Gold, "
+    "Silver, Black, Pink, Hot Pink, Baby Pink, Red, Maroon, Blue, Navy, Pastel Blue, etc.\n\n"
+    "NEVER skip an item type that is clearly visible. Look at the image multiple times."
 )
 
-DETECT_USER_PROMPT = """Analyze this decoration photo. Return JSON in this exact shape:
+DETECT_USER_PROMPT = """Analyze this decoration photo VERY thoroughly. Count balloons aggressively.
+
+Return strict JSON:
 
 {
   "is_screenshot": false,
@@ -655,18 +679,23 @@ DETECT_USER_PROMPT = """Analyze this decoration photo. Return JSON in this exact
       "shape": "round" | "heart" | "star" | "number" | "letter" | "bottle" | "other",
       "character": "5",
       "subtype": "foil_curtain" | "led_curtain" | "fairy_lights" | "...",
-      "quantity": 200,
+      "quantity": 150,
       "confidence": "high" | "medium" | "low",
       "notes": "optional description"
     }
   ],
-  "color_palette": ["pink", "gold", "white"],
+  "color_palette": ["gold", "silver", "white"],
   "dominant_mood": "vibrant, premium, romantic, ...",
   "setup_complexity": "easy" | "medium" | "hard",
   "estimated_setup_minutes": 60
 }
 
-Be thorough. Every visible balloon must be counted. Use confidence "low" if unsure."""
+REMEMBER:
+1. A garland visible in image = at least 100-200 balloons total split across sizes.
+2. List EACH size of balloon as a SEPARATE entry (5\", 10\", 12\", 18\").
+3. Big foil shapes (bottles, numbers, letters) = type \"foil_balloon\" + appropriate shape.
+4. Look for backdrops, lights, foil curtains, neon signs, confetti props — list them all.
+5. Round quantities UP, not down."""
 
 
 async def _fetch_image_bytes_for_vision(image_url: Optional[str], image_base64: Optional[str]) -> bytes:
@@ -722,8 +751,8 @@ async def detect_items(req: DetectItemsRequest):
                     {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}},
                 ]},
             ],
-            max_tokens=2500,
-            temperature=0.2,
+            max_tokens=4000,
+            temperature=0.3,
         )
 
         raw = response.choices[0].message.content
