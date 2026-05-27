@@ -19,7 +19,7 @@ router.get('/admin/inventory/items', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   const {
     category, subcategory, color, finish, size, search,
-    page = 1, limit = 50, active,
+    page = 1, limit = 50, active, auto_only,
   } = req.query
 
   const filter = {}
@@ -29,6 +29,7 @@ router.get('/admin/inventory/items', asyncRoute(async (req, res, ok) => {
   if (finish)      filter.finish      = finish
   if (size)        filter.size_inches = Number(size)
   if (active !== undefined) filter.active = active === 'true'
+  if (auto_only === 'true') filter.auto_created = true
   if (search) {
     filter.$or = [
       { sku_code:        { $regex: search, $options: 'i' } },
@@ -61,8 +62,9 @@ router.get('/admin/inventory/stats', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   const col = db.collection('master_inventory')
 
-  const [total, byCategory, byColor, byFinish] = await Promise.all([
+  const [total, autoCreated, byCategory, byColor, byFinish] = await Promise.all([
     col.countDocuments({ active: true }),
+    col.countDocuments({ active: true, auto_created: true }),
     col.aggregate([
       { $match: { active: true } },
       { $group: { _id: '$category', count: { $sum: 1 } } },
@@ -83,6 +85,7 @@ router.get('/admin/inventory/stats', asyncRoute(async (req, res, ok) => {
 
   return ok({
     total,
+    auto_created: autoCreated,
     categories: byCategory.map(c => ({ name: c._id, count: c.count })),
     colors:     byColor.map(c => ({ name: c._id, count: c.count })),
     finishes:   byFinish.map(c => ({ name: c._id, count: c.count })),
