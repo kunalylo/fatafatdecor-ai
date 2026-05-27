@@ -117,6 +117,44 @@ async function autoCreateSku(db, detection) {
   return doc
 }
 
+/**
+ * Sync the master_inventory usage tracking for a reference:
+ *   - Remove this referenceId from any SKU that no longer uses it
+ *   - Add this referenceId to every SKU now used (idempotent, no duplicates)
+ *
+ * Called after a reference's detected_items are saved/updated, and when the
+ * reference is deleted (pass empty newSkuCodes).
+ */
+async function syncSkuUsage(db, referenceId, newSkuCodes) {
+  const cleanCodes = [...new Set((newSkuCodes || []).filter(Boolean))]
+
+  // 1. Remove referenceId from any SKU that's no longer in the list
+  await db.collection('master_inventory').updateMany(
+    {
+      used_in_references: referenceId,
+      ...(cleanCodes.length > 0 ? { sku_code: { $nin: cleanCodes } } : {}),
+    },
+    {
+      $pull: { used_in_references: referenceId },
+      $set:  { last_referenced_at: new Date() },
+    },
+  )
+
+  // 2. Add referenceId to all SKUs now in the list (skip if already there)
+  if (cleanCodes.length > 0) {
+    await db.collection('master_inventory').updateMany(
+      { sku_code: { $in: cleanCodes } },
+      {
+        $addToSet: { used_in_references: referenceId },
+        $set: {
+          ai_used: true,
+          last_referenced_at: new Date(),
+        },
+      },
+    )
+  }
+}
+
 // Look up the best SKU candidates for a detected item, then ask Gemini to pick the best match.
 async function findBestSkuMatch(db, detection) {
   // Build filter from detection
@@ -311,6 +349,10 @@ async function runReferencePipeline(referenceId) {
         updated_at: new Date(),
       }},
     )
+
+    // 6. Update inventory usage tracking so admin can filter "Used in references"
+    const usedSkuCodes = detectedItems.map(i => i.matched_sku_code).filter(Boolean)
+    await syncSkuUsage(db, referenceId, usedSkuCodes)
   } catch (e) {
     console.error('[reference-pipeline]', referenceId, e)
     await db.collection('reference_designs').updateOne(
@@ -464,6 +506,34 @@ router.get('/admin/references', asyncRoute(async (req, res, ok) => {
 
 // ── STATIC-PATH ROUTES MUST BE BEFORE /:id ──────────────────────
 // (Express matches in order — /:id swallows literal paths otherwise.)
+
+// POST /admin/references/backfill-sku-usage — rebuild master_inventory.used_in_references
+// from scratch for all references. Safe to re-run.
+router.post('/admin/references/backfill-sku-usage', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+
+  // 1. Wipe used_in_references everywhere
+  await db.collection('master_inventory').updateMany(
+    {},
+    { $set: { used_in_references: [], ai_used: false } },
+  )
+
+  // 2. Walk every reference and rebuild
+  const refs = await db.collection('reference_designs')
+    .find({})
+    .project({ id: 1, detected_items: 1 })
+    .toArray()
+
+  let touched = 0
+  for (const r of refs) {
+    const codes = (r.detected_items || []).map(i => i.matched_sku_code).filter(Boolean)
+    if (codes.length === 0) continue
+    await syncSkuUsage(db, r.id, codes)
+    touched++
+  }
+
+  return ok({ references_processed: touched, total_references: refs.length })
+}))
 
 // POST /admin/references/backfill-brackets — one-shot to tag pre-bracket references
 router.post('/admin/references/backfill-brackets', asyncRoute(async (req, res, ok) => {
@@ -664,6 +734,13 @@ router.put('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
     { returnDocument: 'after' },
   )
   if (!result) return err('Reference not found', 404)
+
+  // Sync inventory usage tracking if items changed
+  if (itemsChanged) {
+    const usedSkuCodes = (result.detected_items || []).map(i => i.matched_sku_code).filter(Boolean)
+    await syncSkuUsage(db, req.params.id, usedSkuCodes)
+  }
+
   const { _id, ...clean } = result
   return ok(clean)
 }))
@@ -737,6 +814,8 @@ router.delete('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
   const result = await db.collection('reference_designs').findOneAndDelete({ id: req.params.id })
   if (!result) return err('Reference not found', 404)
+  // Remove this reference from all SKUs that tracked it
+  await syncSkuUsage(db, req.params.id, [])
   return ok({ deleted: true, id: req.params.id })
 }))
 

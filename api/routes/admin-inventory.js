@@ -19,7 +19,7 @@ router.get('/admin/inventory/items', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   const {
     category, subcategory, color, finish, size, search,
-    page = 1, limit = 50, active, auto_only,
+    page = 1, limit = 50, active, auto_only, used_only,
   } = req.query
 
   const filter = {}
@@ -30,6 +30,7 @@ router.get('/admin/inventory/items', asyncRoute(async (req, res, ok) => {
   if (size)        filter.size_inches = Number(size)
   if (active !== undefined) filter.active = active === 'true'
   if (auto_only === 'true') filter.auto_created = true
+  if (used_only === 'true') filter.used_in_references = { $exists: true, $not: { $size: 0 } }
   if (search) {
     filter.$or = [
       { sku_code:        { $regex: search, $options: 'i' } },
@@ -49,7 +50,10 @@ router.get('/admin/inventory/items', asyncRoute(async (req, res, ok) => {
   ])
 
   return ok({
-    items: items.map(({ _id, ...i }) => i),
+    items: items.map(({ _id, ...i }) => ({
+      ...i,
+      used_in_references_count: Array.isArray(i.used_in_references) ? i.used_in_references.length : 0,
+    })),
     total,
     page: pageNum,
     limit: limitNum,
@@ -62,9 +66,29 @@ router.get('/admin/inventory/stats', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   const col = db.collection('master_inventory')
 
-  const [total, autoCreated, byCategory, byColor, byFinish] = await Promise.all([
+  // Auto-backfill usage tracking once if it appears empty
+  // (one-shot — safe to call repeatedly)
+  const hasAnyUsageTracking = await col.countDocuments({ ai_used: true }, { limit: 1 })
+  if (hasAnyUsageTracking === 0) {
+    const refs = await db.collection('reference_designs')
+      .find({})
+      .project({ id: 1, detected_items: 1 })
+      .toArray()
+    for (const r of refs) {
+      const codes = [...new Set((r.detected_items || []).map(i => i.matched_sku_code).filter(Boolean))]
+      if (codes.length > 0) {
+        await col.updateMany(
+          { sku_code: { $in: codes } },
+          { $addToSet: { used_in_references: r.id }, $set: { ai_used: true, last_referenced_at: new Date() } },
+        )
+      }
+    }
+  }
+
+  const [total, autoCreated, usedCount, byCategory, byColor, byFinish] = await Promise.all([
     col.countDocuments({ active: true }),
     col.countDocuments({ active: true, auto_created: true }),
+    col.countDocuments({ active: true, used_in_references: { $exists: true, $not: { $size: 0 } } }),
     col.aggregate([
       { $match: { active: true } },
       { $group: { _id: '$category', count: { $sum: 1 } } },
@@ -86,6 +110,7 @@ router.get('/admin/inventory/stats', asyncRoute(async (req, res, ok) => {
   return ok({
     total,
     auto_created: autoCreated,
+    used_in_references: usedCount,
     categories: byCategory.map(c => ({ name: c._id, count: c.count })),
     colors:     byColor.map(c => ({ name: c._id, count: c.count })),
     finishes:   byFinish.map(c => ({ name: c._id, count: c.count })),
