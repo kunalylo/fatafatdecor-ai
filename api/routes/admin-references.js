@@ -10,6 +10,8 @@ import { asyncRoute } from '../helpers.js'
 import { AI_SERVICE_URL, IMAGEKIT_PRIVATE_KEY } from '../config.js'
 import { parseFilename } from '../lib/filename-parser.js'
 import { BUDGET_BRACKETS, bracketForPrice } from '../lib/budget-brackets.js'
+import { customerBreakdown, adminMargin } from '../lib/pricing-calc.js'
+import { estimateUnitCost, buildAutoSkuCode } from '../lib/sku-defaults.js'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } })
@@ -58,6 +60,63 @@ async function callFastAPI(endpoint, body) {
   }
 }
 
+/**
+ * Create a placeholder master_inventory SKU for a detected item with no inventory match.
+ * Cost is estimated from category + size. Admin can refine later.
+ */
+async function autoCreateSku(db, detection) {
+  const cost = estimateUnitCost(detection)
+  const sell = Math.round(cost * 2 * 100) / 100
+  const sku_code = buildAutoSkuCode(detection)
+
+  // Try to upsert — if another reference already triggered the same SKU, reuse it
+  const existing = await db.collection('master_inventory').findOne({ sku_code })
+  if (existing) return existing
+
+  const doc = {
+    id: uuidv4(),
+    sku_code,
+    category:
+      detection.type === 'latex_balloon' ? 'Latex Balloons' :
+      detection.type === 'foil_balloon'  ? 'Foil Balloons'  :
+      detection.type === 'backdrop'      ? 'Foil Balloon Backdrop Units' :
+      detection.type === 'light'         ? 'Lights' :
+      detection.type === 'flower'        ? 'Flowers' :
+      detection.type === 'prop'          ? 'Props'  :
+      'Other',
+    subcategory: String(detection.subtype || detection.shape || detection.type || 'Auto'),
+    brand_supplier: 'AUTO-CREATED — review and assign supplier',
+    material: detection.type === 'foil_balloon' ? 'Foil/Mylar' : 'Latex/Other',
+    finish: String(detection.finish || ''),
+    shape: String(detection.shape || ''),
+    size_inches: Number(detection.size_inches) || 0,
+    color: String(detection.color || ''),
+    pack_quantity: 1,
+    cost_price_pack: cost,
+    per_unit_cost: cost,
+    selling_price_pack: sell,
+    selling_price_per_unit: sell,
+    source_url: '',
+    image_search_ref: `${detection.color || ''} ${detection.finish || ''} ${detection.type || ''} ${detection.size_inches || ''}`.trim(),
+    ai_usage_notes: 'Auto-created from reference design upload — review cost and supplier',
+    inventory_status: 'Active',
+    active: true,
+    auto_created: true,
+    needs_review: true,
+    stock_count: 0,
+    reorder_threshold: 50,
+    created_at: new Date(),
+    updated_at: new Date(),
+  }
+  try {
+    await db.collection('master_inventory').insertOne(doc)
+  } catch (e) {
+    // Race condition — another concurrent upload created the same SKU
+    return await db.collection('master_inventory').findOne({ sku_code })
+  }
+  return doc
+}
+
 // Look up the best SKU candidates for a detected item, then ask Gemini to pick the best match.
 async function findBestSkuMatch(db, detection) {
   // Build filter from detection
@@ -90,7 +149,15 @@ async function findBestSkuMatch(db, detection) {
     delete filter.color
     candidates = await db.collection('master_inventory').find(filter).limit(20).toArray()
   }
-  if (candidates.length === 0) return null
+  if (candidates.length === 0) {
+    // No inventory match even after widening — auto-create a placeholder SKU
+    const created = await autoCreateSku(db, detection)
+    return {
+      sku: created,
+      confidence: 'auto_created',
+      reasoning: `No matching SKU found — auto-created ${created.sku_code} with estimated cost Rs ${created.per_unit_cost}`,
+    }
+  }
 
   // Ask Gemini to pick best
   const slim = candidates.map(c => ({
@@ -203,9 +270,12 @@ async function runReferencePipeline(referenceId) {
       }
     }
 
-    // 3. Pricing: service_charge = base_price - items_price_total
+    // 3. Pricing: new model — base_price is the decoration & material total at 2x.
+    //    Customer pays base_price + setup_transport + platform + convenience + GST 18%.
     const basePrice = Number(ref.base_price) || 0
-    const serviceCharge = Math.max(0, basePrice - itemsPriceTotal)
+    const breakdown = customerBreakdown(basePrice)
+    const margin    = adminMargin(basePrice, itemsCostTotal)
+    const itemsGap  = Math.max(0, basePrice - itemsPriceTotal)  // how short of base_price are the items at 2x
 
     // 4. Generate tags
     const itemsSummary = detectedItems
@@ -220,19 +290,19 @@ async function runReferencePipeline(referenceId) {
     })
 
     // 5. Update reference doc
-    const marginValue = basePrice - itemsCostTotal
-    const marginPct = basePrice > 0 ? (marginValue / basePrice) * 100 : 0
-
     await db.collection('reference_designs').updateOne(
       { id: referenceId },
       { $set: {
         status: 'pending_review',
-        detected_items: detectedItems,
+        detected_items:      detectedItems,
         items_cost_total:    Math.round(itemsCostTotal * 100) / 100,
         items_price_total:   Math.round(itemsPriceTotal * 100) / 100,
-        service_charge:      Math.round(serviceCharge * 100) / 100,
-        estimated_margin:    Math.round(marginValue * 100) / 100,
-        margin_percent:      Math.round(marginPct * 10) / 10,
+        items_gap:           Math.round(itemsGap * 100) / 100,   // base_price - items_price_total
+        customer_breakdown:  breakdown,                          // setup/platform/conv/gst/total
+        estimated_margin:    margin.operating_margin,
+        margin_percent:      margin.margin_percent,
+        // Legacy field kept for backward compat (some old code may still read it)
+        service_charge:      breakdown.fees_subtotal,
         ai_tags:             tagsRes.tags || [],
         ai_color_palette:    detection.color_palette || [],
         ai_dominant_mood:    detection.dominant_mood || '',
@@ -559,22 +629,33 @@ router.put('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
     updates.budget_bracket_label = b.label
   }
 
-  // If detected_items changed, recompute totals
-  if (Array.isArray(updates.detected_items)) {
-    let cost = 0, price = 0
-    for (const i of updates.detected_items) {
-      cost  += (Number(i.unit_cost)  || 0) * (Number(i.quantity) || 1)
-      price += (Number(i.unit_price) || 0) * (Number(i.quantity) || 1)
-    }
-    updates.items_cost_total  = Math.round(cost  * 100) / 100
-    updates.items_price_total = Math.round(price * 100) / 100
-
-    // Recalculate service charge if base_price exists
+  // Recompute pricing if items or base_price changed
+  const itemsChanged = Array.isArray(updates.detected_items)
+  const priceChanged = updates.base_price !== undefined
+  if (itemsChanged || priceChanged) {
     const ref = await db.collection('reference_designs').findOne({ id: req.params.id })
+
+    let cost  = ref?.items_cost_total  || 0
+    let price = ref?.items_price_total || 0
+    if (itemsChanged) {
+      cost  = 0; price = 0
+      for (const i of updates.detected_items) {
+        cost  += (Number(i.unit_cost)  || 0) * (Number(i.quantity) || 1)
+        price += (Number(i.unit_price) || 0) * (Number(i.quantity) || 1)
+      }
+      updates.items_cost_total  = Math.round(cost  * 100) / 100
+      updates.items_price_total = Math.round(price * 100) / 100
+    }
+
     const basePrice = Number(updates.base_price ?? ref?.base_price ?? 0)
-    updates.service_charge = Math.max(0, basePrice - updates.items_price_total)
-    updates.estimated_margin = basePrice - updates.items_cost_total
-    updates.margin_percent = basePrice > 0 ? Math.round((updates.estimated_margin / basePrice) * 1000) / 10 : 0
+    const breakdown = customerBreakdown(basePrice)
+    const margin    = adminMargin(basePrice, cost)
+
+    updates.items_gap          = Math.max(0, Math.round((basePrice - price) * 100) / 100)
+    updates.customer_breakdown = breakdown
+    updates.service_charge     = breakdown.fees_subtotal  // legacy
+    updates.estimated_margin   = margin.operating_margin
+    updates.margin_percent     = margin.margin_percent
   }
 
   const result = await db.collection('reference_designs').findOneAndUpdate(
