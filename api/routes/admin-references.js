@@ -156,25 +156,48 @@ async function syncSkuUsage(db, referenceId, newSkuCodes) {
 }
 
 // Look up the best SKU candidates for a detected item, then ask Gemini to pick the best match.
+// Specific shapes (bottle / number / letter / heart / star) MUST match a SKU with that
+// shape — otherwise we auto-create. This prevents a "champagne bottle" detection from
+// silently being routed to a "gold number 5" SKU just because both are foil balloons.
 async function findBestSkuMatch(db, detection) {
-  // Build filter from detection
   const filter = { active: true }
-  const type = detection.type || ''
+  const type  = String(detection.type  || '').toLowerCase()
+  const shape = String(detection.shape || '').toLowerCase()
 
   if (type === 'latex_balloon') filter.category = 'Latex Balloons'
   else if (type === 'foil_balloon') filter.category = 'Foil Balloons'
+  else if (type === 'backdrop') filter.category = { $regex: 'backdrop', $options: 'i' }
+  else if (type === 'light')    filter.category = { $regex: 'light',    $options: 'i' }
+  else if (type === 'flower')   filter.category = { $regex: 'flower',   $options: 'i' }
+  else if (type === 'prop')     filter.category = { $regex: 'prop',     $options: 'i' }
 
   if (detection.color)  filter.color  = { $regex: `^${detection.color}$`, $options: 'i' }
   if (detection.finish) filter.finish = { $regex: detection.finish, $options: 'i' }
   if (detection.size_inches) {
-    // Allow ±2 inch tolerance for size matching
     const s = Number(detection.size_inches)
     filter.size_inches = { $gte: s - 2, $lte: s + 2 }
   }
 
+  // Specific-shape detections must match shape — these aren't substitutable with
+  // any other foil balloon. If no shape match exists, auto-create.
+  const SPECIFIC_SHAPES = ['bottle', 'number', 'letter']
+  const SOFT_SHAPES     = ['heart', 'star']
+  const isSpecific      = SPECIFIC_SHAPES.includes(shape)
+  const isSoftShape     = SOFT_SHAPES.includes(shape)
+
+  if (isSpecific || isSoftShape) {
+    filter.$or = [
+      { shape:       { $regex: shape, $options: 'i' } },
+      { subcategory: { $regex: shape, $options: 'i' } },
+      { sku_code:    { $regex: shape, $options: 'i' } },
+    ]
+  }
+
   let candidates = await db.collection('master_inventory').find(filter).limit(20).toArray()
 
-  // Widen if no candidates: drop size, then drop finish, then drop color
+  // Widen if no candidates: size first, then finish, then color.
+  // For specific shapes (bottle/number/letter), never widen colour — better to
+  // auto-create than match the wrong item.
   if (candidates.length === 0) {
     delete filter.size_inches
     candidates = await db.collection('master_inventory').find(filter).limit(20).toArray()
@@ -183,12 +206,13 @@ async function findBestSkuMatch(db, detection) {
     delete filter.finish
     candidates = await db.collection('master_inventory').find(filter).limit(20).toArray()
   }
-  if (candidates.length === 0) {
+  if (candidates.length === 0 && !isSpecific) {
     delete filter.color
     candidates = await db.collection('master_inventory').find(filter).limit(20).toArray()
   }
+
   if (candidates.length === 0) {
-    // No inventory match even after widening — auto-create a placeholder SKU
+    // No inventory match — auto-create a placeholder SKU
     const created = await autoCreateSku(db, detection)
     return {
       sku: created,
@@ -216,16 +240,35 @@ async function findBestSkuMatch(db, detection) {
   })
 
   if (!match.success || !match.matched_sku_code) {
-    // Fallback: pick first candidate
-    const fallback = candidates[0]
+    // Gemini totally failed → auto-create rather than force a poor match
+    const created = await autoCreateSku(db, detection)
     return {
-      sku: fallback,
-      confidence: 'low',
-      reasoning: 'auto-picked first candidate (Gemini match failed)',
+      sku: created,
+      confidence: 'auto_created',
+      reasoning: 'Gemini match failed — auto-created instead of forcing a poor match',
     }
   }
 
-  const matchedSku = candidates.find(c => c.sku_code === match.matched_sku_code) || candidates[0]
+  // Gemini said "low" confidence + we have a specific/soft shape mismatch → auto-create.
+  // For low-confidence matches with no shape constraint, accept Gemini's pick.
+  const matchedSku = candidates.find(c => c.sku_code === match.matched_sku_code)
+  if (!matchedSku) {
+    const created = await autoCreateSku(db, detection)
+    return {
+      sku: created,
+      confidence: 'auto_created',
+      reasoning: 'Gemini returned an invalid SKU code — auto-created instead',
+    }
+  }
+  if (match.confidence === 'low' && (isSpecific || isSoftShape)) {
+    const created = await autoCreateSku(db, detection)
+    return {
+      sku: created,
+      confidence: 'auto_created',
+      reasoning: `Low-confidence match for a specific shape (${shape}) — auto-created instead`,
+    }
+  }
+
   return {
     sku: matchedSku,
     confidence: match.confidence || 'medium',
