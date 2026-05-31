@@ -85,6 +85,24 @@ function findInText(text, keywordMap) {
   return null
 }
 
+/**
+ * Find ALL keys whose any variant appears in the text.
+ * Used for multi-value fields like occasions and setup types.
+ */
+function findAllInText(text, keywordMap) {
+  const lower = text.toLowerCase()
+  const found = []
+  for (const [key, variants] of Object.entries(keywordMap)) {
+    for (const v of variants) {
+      if (lower.includes(v.toLowerCase())) {
+        found.push(key)
+        break
+      }
+    }
+  }
+  return found
+}
+
 function findColors(text) {
   const lower = text.toLowerCase()
   const found = []
@@ -181,10 +199,14 @@ export function parseFilename(filename) {
 
   // Find structured fields by scanning full text
   const fullText = base
-  const occasion   = findInText(fullText, OCCASION_KEYWORDS)
-  const setup_type = findInText(fullText, SETUP_KEYWORDS)
+  const occasions  = findAllInText(fullText, OCCASION_KEYWORDS)
+  const setupTypes = findAllInText(fullText, SETUP_KEYWORDS)
   const room_hint  = findInText(fullText, ROOM_KEYWORDS)
   const colors     = findColors(fullText)
+
+  // Primary (single) value kept for backward compat — uses first match
+  const occasion   = occasions[0] || null
+  const setup_type = setupTypes[0] || null
 
   // Always derive a usable theme — colors first, then descriptive segments,
   // finally a sensible fallback from occasion + setup.
@@ -195,9 +217,11 @@ export function parseFilename(filename) {
 
   return {
     price,
-    occasion,
+    occasion,          // primary (backward compat)
+    occasions,         // all matches (new)
     theme,
-    setup_type,
+    setup_type,        // primary (backward compat)
+    setup_types: setupTypes,  // all matches (new)
     room_hint,
     colors,
     tags,

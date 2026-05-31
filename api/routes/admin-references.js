@@ -239,33 +239,47 @@ async function findBestSkuMatch(db, detection) {
     candidates: slim,
   })
 
+  // Gemini service unavailable or threw — fall back to the best candidate
+  // we already found in inventory. Auto-create is a last resort; for common
+  // balloons we'd rather match an existing SKU at "low" confidence than mint
+  // a new one for every Gemini hiccup.
   if (!match.success || !match.matched_sku_code) {
-    // Gemini totally failed → auto-create rather than force a poor match
-    const created = await autoCreateSku(db, detection)
+    const fallback = candidates[0]
     return {
-      sku: created,
-      confidence: 'auto_created',
-      reasoning: 'Gemini match failed — auto-created instead of forcing a poor match',
+      sku: fallback,
+      confidence: 'low',
+      reasoning: 'Gemini matcher unavailable — picked best candidate by filter',
     }
   }
 
-  // Gemini said "low" confidence + we have a specific/soft shape mismatch → auto-create.
-  // For low-confidence matches with no shape constraint, accept Gemini's pick.
+  // Gemini returned a SKU code that's not in our candidates list — likely a
+  // hallucination. Auto-create rather than blindly insert the wrong SKU.
   const matchedSku = candidates.find(c => c.sku_code === match.matched_sku_code)
   if (!matchedSku) {
-    const created = await autoCreateSku(db, detection)
+    if (isSpecific) {
+      const created = await autoCreateSku(db, detection)
+      return {
+        sku: created,
+        confidence: 'auto_created',
+        reasoning: 'Gemini returned an invalid SKU code on specific shape — auto-created',
+      }
+    }
+    // For non-specific shapes, prefer first candidate over auto-create
     return {
-      sku: created,
-      confidence: 'auto_created',
-      reasoning: 'Gemini returned an invalid SKU code — auto-created instead',
+      sku: candidates[0],
+      confidence: 'low',
+      reasoning: 'Gemini returned unknown SKU — picked first candidate',
     }
   }
-  if (match.confidence === 'low' && (isSpecific || isSoftShape)) {
+
+  // Specific shape (bottle / number / letter) + low confidence → auto-create.
+  // For soft shapes and common shapes, accept the low-confidence match.
+  if (match.confidence === 'low' && isSpecific) {
     const created = await autoCreateSku(db, detection)
     return {
       sku: created,
       confidence: 'auto_created',
-      reasoning: `Low-confidence match for a specific shape (${shape}) — auto-created instead`,
+      reasoning: `Low-confidence match for specific shape (${shape}) — auto-created instead`,
     }
   }
 
@@ -419,11 +433,27 @@ router.post('/admin/references/upload', upload.single('file'), asyncRoute(async 
   const originalName = req.body.filename || req.file.originalname || 'untitled.jpg'
   const parsed = parseFilename(originalName)
 
-  // Use provided overrides if admin set them in the form
+  // Use provided overrides if admin set them in the form.
+  // Multi-value fields (occasions, setup_types) accept either an array or a
+  // comma-separated string; we normalise to arrays.
+  const toArray = (v) => {
+    if (Array.isArray(v)) return v.map(x => String(x || '').trim().toLowerCase()).filter(Boolean)
+    if (typeof v === 'string') return v.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    return []
+  }
+
   const basePrice = Number(req.body.base_price) || parsed.price || 0
-  const occasion  = String(req.body.occasion  || parsed.occasion || '').toLowerCase()
-  const theme     = String(req.body.theme     || parsed.theme    || '')
-  const setupType = String(req.body.setup_type|| parsed.setup_type || '')
+  const occasions   = (() => {
+    const fromBody = toArray(req.body.occasions || req.body.occasion)
+    return fromBody.length > 0 ? fromBody : (parsed.occasions || []).map(o => o.toLowerCase())
+  })()
+  const setupTypes  = (() => {
+    const fromBody = toArray(req.body.setup_types || req.body.setup_type)
+    return fromBody.length > 0 ? fromBody : (parsed.setup_types || []).map(s => s.toLowerCase())
+  })()
+  const occasion  = occasions[0]  || ''
+  const setupType = setupTypes[0] || ''
+  const theme     = String(req.body.theme || parsed.theme || '')
 
   if (!basePrice) return err('Could not determine base price from filename. Pass base_price in form data.', 400)
 
@@ -448,9 +478,11 @@ router.post('/admin/references/upload', upload.single('file'), asyncRoute(async 
     base_price:    basePrice,
     budget_bracket: bracket.id,
     budget_bracket_label: bracket.label,
-    occasion,
+    occasion,                       // primary (legacy)
+    occasions,                      // all detected occasions
     theme,
-    setup_type:    setupType,
+    setup_type:    setupType,       // primary (legacy)
+    setup_types:   setupTypes,      // all detected setup types
     room_hint:     parsed.room_hint || null,
 
     // Pipeline outputs (filled in by background task)
@@ -508,10 +540,16 @@ router.post('/admin/references/:id/rerun', asyncRoute(async (req, res, ok, err) 
 // GET /admin/references — list with filters
 router.get('/admin/references', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
-  const { occasion, status, theme, bracket, page = 1, limit = 30, sort = 'recent' } = req.query
+  const { occasion, setup_type, status, theme, bracket, page = 1, limit = 30, sort = 'recent' } = req.query
 
   const filter = {}
-  if (occasion) filter.occasion = occasion
+  // Occasion filter matches either the legacy single-value field OR any element
+  // in the new occasions[] array.
+  if (occasion) filter.$or = [{ occasion }, { occasions: occasion }]
+  if (setup_type) {
+    const setupOr = [{ setup_type }, { setup_types: setup_type }]
+    filter.$or = filter.$or ? [...filter.$or, ...setupOr] : setupOr
+  }
   if (status)   filter.status   = status
   if (theme)    filter.theme    = { $regex: theme, $options: 'i' }
   if (bracket)  filter.budget_bracket = bracket
@@ -734,6 +772,35 @@ router.put('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
   delete updates._id
   delete updates.id
   delete updates.created_at
+
+  // Normalize multi-value fields if admin edited them
+  const toCsvArray = (v) => {
+    if (Array.isArray(v)) return v.map(x => String(x || '').trim().toLowerCase()).filter(Boolean)
+    if (typeof v === 'string') return v.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    return null
+  }
+  if ('occasions' in updates) {
+    const arr = toCsvArray(updates.occasions) || []
+    updates.occasions = arr
+    updates.occasion  = arr[0] || ''   // keep legacy field in sync
+  } else if ('occasion' in updates) {
+    const arr = toCsvArray(updates.occasion) || []
+    if (arr.length > 1) {
+      updates.occasions = arr
+      updates.occasion  = arr[0]
+    }
+  }
+  if ('setup_types' in updates) {
+    const arr = toCsvArray(updates.setup_types) || []
+    updates.setup_types = arr
+    updates.setup_type  = arr[0] || ''
+  } else if ('setup_type' in updates) {
+    const arr = toCsvArray(updates.setup_type) || []
+    if (arr.length > 1) {
+      updates.setup_types = arr
+      updates.setup_type  = arr[0]
+    }
+  }
 
   // If base_price changed, re-classify bracket
   if (updates.base_price !== undefined) {
