@@ -76,6 +76,30 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
     if (paidOrder?.design_id) {
       await db.collection('designs').updateOne({ id: paidOrder.design_id }, { $set: { status: 'ordered' } })
     }
+
+    // ── Reserve SKU stock for reference-flow orders ──
+    // Decrement master_inventory.stock_count by the quantity used. Negative stock
+    // is allowed (admin notices and restocks); we never block an order over stock.
+    if (paidOrder?.flow === 'reference' && Array.isArray(paidOrder.items)) {
+      for (const it of paidOrder.items) {
+        const skuCode = it.matched_sku_code || it.sku_code
+        const qty     = Number(it.quantity) || 0
+        if (skuCode && qty > 0) {
+          await db.collection('master_inventory').updateOne(
+            { sku_code: skuCode },
+            { $inc: { stock_count: -qty }, $set: { last_used_at: new Date() } },
+          ).catch(e => console.warn('[stock-decrement]', skuCode, e.message))
+        }
+      }
+    }
+
+    // ── Bump reference use_count when an order is confirmed (conversion analytics) ──
+    if (paidOrder?.flow === 'reference' && paidOrder.reference_design_id) {
+      await db.collection('reference_designs').updateOne(
+        { id: paidOrder.reference_design_id },
+        { $inc: { use_count: 1 }, $set: { last_used_at: new Date() } },
+      ).catch(e => console.warn('[reference-use-count]', e.message))
+    }
     // Reward: +1 credit for booking a design
     await db.collection('users').updateOne({ id: payment.user_id }, { $inc: { credits: 1 } })
     const payUser = await db.collection('users').findOne({ id: payment.user_id })

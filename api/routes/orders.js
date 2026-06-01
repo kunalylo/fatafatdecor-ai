@@ -38,8 +38,15 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
   const computedGiftTotal  = hasGifts ? gift_items.reduce((s, g) => s + (Number(g.price) || 0) * (Number(g.quantity) || 1), 0) : 0
   const orderTotal         = finalTotal + computedGiftTotal
 
-  // Use items_override from client if user removed addon items, otherwise fall back to design items
-  const orderItems = (Array.isArray(body.items_override) && body.items_override.length > 0) ? body.items_override : (design.items_used || [])
+  // Use items_override from client if user removed addon items, otherwise fall back to design items.
+  // Reference-flow designs store items in design.snapshot.items; legacy kit-flow uses design.items_used.
+  const isReferenceFlow = design.flow === 'reference' || !!design.reference_design_id
+  const designItems = isReferenceFlow
+    ? (design.snapshot?.items || [])
+    : (design.items_used || [])
+  const orderItems = (Array.isArray(body.items_override) && body.items_override.length > 0)
+    ? body.items_override
+    : designItems
 
   const order = {
     id: uuidv4(), user_id, design_id,
@@ -52,6 +59,12 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
     assigned_decorators: [], accepted_decorators: [],
     has_gifts: hasGifts, gift_items: hasGifts ? gift_items : [],
     gift_total: hasGifts ? computedGiftTotal : 0,
+    // Reference-flow extras — decorator sees these, customer view doesn't
+    flow: isReferenceFlow ? 'reference' : 'kit',
+    reference_design_id:     design.reference_design_id     || null,
+    reference_image_url:     design.reference_image_url     || null,
+    reference_thumbnail_url: design.reference_thumbnail_url || null,
+    customer_breakdown:      design.customer_breakdown       || null,
     created_at: new Date(),
   }
   await db.collection('orders').insertOne(order)

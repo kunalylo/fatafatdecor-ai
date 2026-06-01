@@ -96,6 +96,16 @@ class GenerateTagsRequest(BaseModel):
     detected_items_summary: str = ""
 
 
+class ReferenceStyleTransferRequest(BaseModel):
+    """Customer's room + reference image → decorated room (multi-image gpt-image-1)."""
+    room_image_base64: str       # data URL or raw base64 of customer's room photo
+    reference_image_url: str     # ImageKit URL of the reference design
+    occasion: str = ""
+    theme: str = ""
+    room_type: str = ""
+    description: str = ""        # optional special request
+
+
 # ── Helpers ──────────────────────────────────────────────────
 
 def parse_json_safe(text: str) -> dict:
@@ -131,7 +141,7 @@ def _compress_image(image_base64: str, max_px: int = 1024, quality: int = 88) ->
 
 async def run_gpt_image_edit(prompt: str, image_bytes: bytes) -> str:
     """
-    gpt-image-1 via Emergent proxy — edits room photo to add decorations.
+    gpt-image-1 — edits room photo to add decorations (single image mode).
     image_bytes: already compressed JPEG bytes (not base64).
     Returns base64 data URL of the decorated image.
     """
@@ -142,6 +152,35 @@ async def run_gpt_image_edit(prompt: str, image_bytes: bytes) -> str:
         client.images.edit,
         model="gpt-image-1",
         image=("room.jpg", image_bytes, "image/jpeg"),
+        prompt=prompt,
+        n=1,
+        size="1024x1024",
+    )
+    b64 = response.data[0].b64_json
+    return f"data:image/png;base64,{b64}"
+
+
+async def run_gpt_image_edit_with_reference(
+    prompt: str,
+    room_bytes: bytes,
+    reference_bytes: bytes,
+) -> str:
+    """
+    gpt-image-1 multi-image — applies the decoration STYLE of the reference image
+    to the customer's room. The room is the canvas; the reference is the style guide.
+    Both inputs are pre-compressed JPEG bytes.
+    Returns base64 data URL of the decorated image.
+    """
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    response = await asyncio.to_thread(
+        client.images.edit,
+        model="gpt-image-1",
+        image=[
+            ("room.jpg",      room_bytes,      "image/jpeg"),
+            ("reference.jpg", reference_bytes, "image/jpeg"),
+        ],
         prompt=prompt,
         n=1,
         size="1024x1024",
@@ -337,6 +376,7 @@ async def health():
         "endpoints": [
             "/smart-generate", "/generate", "/analyze-decoration",
             "/detect-items", "/match-skus", "/generate-tags",
+            "/style-transfer-from-reference",
         ],
     }
 
@@ -844,6 +884,91 @@ Return JSON:
     except Exception as e:
         print(f"[match-skus] error:\n{traceback.format_exc()}")
         return {"success": False, "matched_sku_code": None, "confidence": "low", "reasoning": str(e)}
+
+
+STYLE_TRANSFER_NO_TEXT = (
+    "Do NOT add any text, words, letters, numbers, or labels anywhere in the image — "
+    "no text on balloons, banners, backdrops, walls, or any surface. Completely text-free."
+)
+
+
+def _build_style_transfer_prompt(occasion: str, theme: str, room_type: str, description: str) -> str:
+    """
+    Build the gpt-image-1 prompt for reference → room style transfer.
+    The reference (image 2) is the visual STYLE the customer wants to recreate.
+    The customer's room (image 1) is the CANVAS — its structure must remain unchanged.
+    """
+    parts = [
+        f"Decorate the customer's room (image 1) in the EXACT decoration style shown in the reference image (image 2).",
+        "",
+        "Match from the reference:",
+        "• Colour palette (every dominant colour used in the reference)",
+        "• Balloon density, clustering, and arrangement",
+        "• Backdrop style, position, and material (foil curtain / net / disco / etc.)",
+        "• Lighting mood and atmosphere",
+        "• Overall composition and focal points",
+        "• Decorative props, foil shapes, and floral elements visible",
+        "",
+        "Adapt to the customer's room:",
+        "• Keep all existing furniture, walls, floor, ceiling structure UNCHANGED",
+        "• Scale decorations to the customer's actual room dimensions",
+        "• Place balloons and props naturally for the customer's wall layout",
+        "• The end result should look like a real professional decoration done in the customer's actual space — not a copy-paste of the reference",
+        "",
+    ]
+    if occasion: parts.append(f"Occasion: {occasion.replace('_', ' ')}.")
+    if theme:    parts.append(f"Theme: {theme}.")
+    if room_type:parts.append(f"Room type: {room_type}.")
+    if description: parts.append(f"Customer special request: {description}.")
+    parts.extend([
+        "",
+        STYLE_TRANSFER_NO_TEXT,
+        "Photorealistic, warm festive lighting matching the reference mood.",
+    ])
+    return "\n".join(parts)
+
+
+@app.post("/style-transfer-from-reference")
+async def style_transfer_from_reference(req: ReferenceStyleTransferRequest):
+    """
+    Multi-image style transfer:
+      - Customer's room photo (the canvas)
+      - Reference decoration image (the style guide)
+      → Decorated version of customer's room in the reference's style.
+    """
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+    if not req.room_image_base64:
+        raise HTTPException(status_code=400, detail="room_image_base64 required")
+    if not req.reference_image_url:
+        raise HTTPException(status_code=400, detail="reference_image_url required")
+
+    try:
+        # Compress room photo
+        room_bytes = await asyncio.to_thread(_compress_image, req.room_image_base64)
+
+        # Download + compress reference image
+        import requests
+        r = await asyncio.to_thread(requests.get, req.reference_image_url, timeout=30)
+        r.raise_for_status()
+        ref_data_url = "data:image/jpeg;base64," + base64.b64encode(r.content).decode("utf-8")
+        ref_bytes = await asyncio.to_thread(_compress_image, ref_data_url)
+
+        # Build prompt
+        prompt = _build_style_transfer_prompt(req.occasion, req.theme, req.room_type, req.description)
+        print(f"\n{'='*60}\n[STYLE TRANSFER PROMPT]\n{prompt}\n{'='*60}\n")
+
+        # Multi-image gpt-image-1
+        image_url = await run_gpt_image_edit_with_reference(prompt, room_bytes, ref_bytes)
+
+        return {
+            "success": True,
+            "image_url": image_url,
+            "prompt_used": prompt,
+        }
+    except Exception as e:
+        print(f"[style-transfer] error:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/generate-tags")

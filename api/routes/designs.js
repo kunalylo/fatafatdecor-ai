@@ -4,7 +4,8 @@ import { connectToMongo } from '../db.js'
 import { requireUser } from '../jwt.js'
 import { asyncRoute } from '../helpers.js'
 import { AI_SERVICE_URL, IMAGEKIT_PRIVATE_KEY } from '../config.js'
-import { BUDGET_BRACKETS, validBudgetTuples } from '../lib/budget-brackets.js'
+import { BUDGET_BRACKETS, validBudgetTuples, findBracket } from '../lib/budget-brackets.js'
+import { customerBreakdown, adminMargin } from '../lib/pricing-calc.js'
 
 const router = Router()
 
@@ -191,6 +192,220 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
   const { _id, ...cleanDesign } = design
   return ok({ ...cleanDesign, remaining_credits: updatedUser?.credits ?? 0, kit_used: !!selectedKit })
 }))
+
+
+// ===================================================================
+// NEW: POST /designs/generate-from-reference
+// Customer flow — picks best matching reference design + style-transfers
+// it onto their room photo. Replaces the kit-based /designs/generate
+// once customer apps cut over.
+// ===================================================================
+
+// Map customer occasion to compatible reference occasion variants
+const OCCASION_COMPATIBILITY = {
+  birthday:     ['birthday','party'],
+  anniversary:  ['anniversary','dinner'],
+  wedding:      ['wedding'],
+  dinner:       ['dinner','anniversary'],
+  party:        ['party','birthday'],
+  baby_shower:  ['baby_shower'],
+  engagement:   ['engagement'],
+  corporate:    ['corporate','store_opening'],
+  festival:     ['festival'],
+  housewarming: ['housewarming'],
+  new_year:     ['new_year','party'],
+  store_opening:['store_opening','corporate'],
+}
+
+router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const user_id = req.userId
+  const {
+    room_type, occasion, description, original_image,
+    budget_min, budget_max, theme_preference,
+  } = req.body
+
+  if (!room_type || !occasion) return err('room_type and occasion required')
+  if (!original_image || !original_image.includes('base64')) {
+    return err('Room photo required (original_image as data URL)')
+  }
+  if (!VALID_ROOM_TYPES.includes(room_type)) return err('Invalid room type', 400)
+  if (!VALID_OCCASIONS.includes(occasion))   return err('Invalid occasion', 400)
+  const bMin = Number(budget_min) || 3000
+  const bMax = Number(budget_max) || 5000
+  if (!VALID_BUDGETS.some(([mn, mx]) => mn === bMin && mx === bMax)) return err('Invalid budget range', 400)
+  const bracket = findBracket(bMin, bMax)
+  if (!bracket) return err('Could not identify bracket for given budget range', 400)
+  const safeDescription = description ? String(description).slice(0, 200) : ''
+
+  // ── Atomic credit deduction (same contract as legacy endpoint) ──────
+  const creditResult = await db.collection('users').findOneAndUpdate(
+    { id: user_id, credits: { $gt: 0 } },
+    { $inc: { credits: -1 } },
+    { returnDocument: 'after' },
+  )
+  if (!creditResult) return err('No credits remaining. Please purchase credits.', 402)
+
+  // ── Find candidate references ───────────────────────────────────────
+  const occasionVariants = OCCASION_COMPATIBILITY[occasion] || [occasion]
+  const candidates = await db.collection('reference_designs').find({
+    active: true,
+    status: 'approved',
+    budget_bracket: bracket.id,
+    $or: [
+      { occasion:  { $in: occasionVariants } },
+      { occasions: { $in: occasionVariants } },
+    ],
+  }).limit(20).toArray()
+
+  // Widen: drop bracket if no occasion match, then drop occasion
+  let pool = candidates
+  if (pool.length === 0) {
+    pool = await db.collection('reference_designs').find({
+      active: true,
+      status: 'approved',
+      $or: [
+        { occasion:  { $in: occasionVariants } },
+        { occasions: { $in: occasionVariants } },
+      ],
+    }).limit(20).toArray()
+  }
+  if (pool.length === 0) {
+    pool = await db.collection('reference_designs').find({
+      active: true,
+      status: 'approved',
+      budget_bracket: bracket.id,
+    }).limit(20).toArray()
+  }
+
+  if (pool.length === 0) {
+    // Refund credit — no eligible references
+    await db.collection('users').updateOne({ id: user_id }, { $inc: { credits: 1 } })
+    return err('No matching reference designs available for that budget + occasion yet. Please try a different combination or check back soon.', 404)
+  }
+
+  // ── Score + pick the best one ───────────────────────────────────────
+  const themeLower = String(theme_preference || '').toLowerCase()
+  const scored = pool.map(r => {
+    let score = 0
+    // Exact occasion match (best)
+    if (r.occasion === occasion || (r.occasions || []).includes(occasion)) score += 40
+    // Bracket match
+    if (r.budget_bracket === bracket.id) score += 30
+    // Theme preference match
+    if (themeLower && String(r.theme || '').toLowerCase().includes(themeLower)) score += 20
+    // Popularity
+    score += Math.min(20, (r.use_count || 0))
+    // Margin health
+    if (typeof r.margin_percent === 'number' && r.margin_percent > 60) score += 10
+    return { ref: r, score }
+  })
+  scored.sort((a, b) => b.score - a.score)
+  const picked = scored[0].ref
+
+  const designId = uuidv4()
+  let decoratedImageUrl = null
+  let aiSucceeded = false
+
+  // ── Style transfer via FastAPI multi-image gpt-image-1 ──────────────
+  try {
+    const controller = new AbortController()
+    const timeout    = setTimeout(() => controller.abort(), 120000)
+    const styleRes = await fetch(`${AI_SERVICE_URL}/style-transfer-from-reference`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        room_image_base64:   original_image,
+        reference_image_url: picked.image_url,
+        occasion,
+        theme:        picked.theme || '',
+        room_type,
+        description:  safeDescription,
+      }),
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+    const data = await styleRes.json()
+    if (!data.success || !data.image_url) throw new Error(data.detail || 'Style transfer failed')
+
+    // Upload to ImageKit
+    const uploaded = await uploadToImageKit(data.image_url, designId)
+    decoratedImageUrl = uploaded || data.image_url
+    aiSucceeded = true
+  } catch (e) {
+    console.error('[generate-from-reference] AI error:', e.message)
+    await db.collection('users').updateOne({ id: user_id }, { $inc: { credits: 1 } })
+    const isTimeout = e.name === 'AbortError' || e.message?.includes('aborted')
+    return err(isTimeout
+      ? 'AI generation timed out. Please try again.'
+      : 'AI image generation failed. Please try again.', 500)
+  }
+
+  // ── Snapshot: freeze items + customer breakdown at generation time ──
+  const snapshotItems = (picked.detected_items || []).map(i => ({
+    id:               i.matched_sku_id || uuidv4(),
+    matched_sku_code: i.matched_sku_code || null,
+    name:             i.sku_name || i.raw_detection || 'Item',
+    category:         i.category || '',
+    quantity:         i.quantity || 1,
+    unit_price:       i.unit_price || 0,        // 2x customer-facing price
+    line_price:       i.line_price || 0,
+    is_removable:     !!i.is_removable,
+  }))
+  const breakdown = customerBreakdown(picked.base_price)
+
+  // ── Save the design ────────────────────────────────────────────────
+  const updatedUser = await db.collection('users').findOne({ id: user_id })
+  const design = {
+    id: designId,
+    user_id,
+    room_type,
+    occasion,
+    description: safeDescription,
+    original_image: '[uploaded]',          // don't store the raw data URL
+    decorated_image: decoratedImageUrl,
+
+    // Reference linkage
+    reference_design_id: picked.id,
+    reference_image_url: picked.image_url,
+    reference_thumbnail_url: picked.thumbnail_url || picked.image_url,
+    reference_price: picked.base_price,
+
+    // Snapshot (frozen at generation time so pricing is stable)
+    snapshot: {
+      items: snapshotItems,
+      items_price_total: picked.items_price_total || 0,
+      items_cost_total:  picked.items_cost_total  || 0,
+      customer_breakdown: breakdown,
+      base_price: picked.base_price,
+      budget_bracket: picked.budget_bracket,
+    },
+
+    // Customer-facing totals (mirrors snapshot for fast reads)
+    total_cost: breakdown.total,
+    decoration_total: breakdown.decoration_total,
+    customer_breakdown: breakdown,
+
+    ai_selected: aiSucceeded,
+    status: 'generated',
+    flow:   'reference',                  // distinguishes from legacy kit-based designs
+    created_at: new Date(),
+  }
+  await db.collection('designs').insertOne(design)
+
+  // ── Bump reference view count (analytics) ──────────────────────────
+  await db.collection('reference_designs').updateOne(
+    { id: picked.id },
+    { $inc: { view_count: 1 } },
+  )
+
+  const { _id, ...clean } = design
+  return ok({
+    ...clean,
+    remaining_credits: updatedUser?.credits ?? 0,
+  })
+}))
+
 
 // GET /designs — requires JWT, only returns own designs
 router.get('/designs', requireUser, asyncRoute(async (req, res, ok) => {
