@@ -458,7 +458,12 @@ router.post('/admin/references/upload', upload.single('file'), asyncRoute(async 
   if (!basePrice) return err('Could not determine base price from filename. Pass base_price in form data.', 400)
 
   const referenceId = uuidv4()
-  const bracket = bracketForPrice(basePrice)
+  // Bracket reflects what the CUSTOMER pays end-to-end (with setup/fees/GST),
+  // NOT just the decoration value. A Rs 7,500 decoration is Rs 9,736 total →
+  // still falls in 5K-10K. A Rs 10K decoration is Rs ~12,800 → 10K-15K. This
+  // matches what the customer picks in their budget selector.
+  const breakdownForBracket = customerBreakdown(basePrice)
+  const bracket = bracketForPrice(breakdownForBracket.total)
 
   // Upload to ImageKit
   let ikData
@@ -616,23 +621,37 @@ router.post('/admin/references/backfill-sku-usage', asyncRoute(async (req, res, 
   return ok({ references_processed: touched, total_references: refs.length })
 }))
 
-// POST /admin/references/backfill-brackets — one-shot to tag pre-bracket references
+// Helper: bracket should reflect what CUSTOMER pays (with setup + fees + GST),
+// not the bare decoration price. Keeps bracket label in sync with checkout.
+function classifyBracket(basePrice) {
+  const breakdown = customerBreakdown(basePrice)
+  return bracketForPrice(breakdown.total)
+}
+
+// POST /admin/references/backfill-brackets — recompute bracket for every reference
+// using the current rule (customer total). Safe to re-run; pass ?force=true to
+// re-tag even references that already have a bracket set.
 router.post('/admin/references/backfill-brackets', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
-  const refs = await db.collection('reference_designs')
-    .find({ $or: [{ budget_bracket: { $exists: false } }, { budget_bracket: null }] })
-    .toArray()
+  const force = req.query.force === 'true' || req.body?.force === true
 
-  let updated = 0
+  const filter = force
+    ? {}
+    : { $or: [{ budget_bracket: { $exists: false } }, { budget_bracket: null }] }
+
+  const refs = await db.collection('reference_designs').find(filter).toArray()
+
+  let updated = 0, changed = 0
   for (const r of refs) {
-    const b = bracketForPrice(r.base_price)
+    const b = classifyBracket(r.base_price)
+    if (r.budget_bracket !== b.id) changed++
     await db.collection('reference_designs').updateOne(
       { id: r.id },
       { $set: { budget_bracket: b.id, budget_bracket_label: b.label } },
     )
     updated++
   }
-  return ok({ updated })
+  return ok({ updated, changed, force })
 }))
 
 // GET /admin/references/budget-coverage — bracket × occasion matrix + gap detector.
@@ -641,16 +660,24 @@ router.post('/admin/references/backfill-brackets', asyncRoute(async (req, res, o
 router.get('/admin/references/budget-coverage', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
 
-  // Auto-backfill any references missing budget_bracket
-  const missing = await db.collection('reference_designs')
-    .find({ $or: [{ budget_bracket: { $exists: false } }, { budget_bracket: null }] })
+  // Auto-rebuild brackets: any reference whose stored budget_bracket no longer
+  // matches what classifyBracket() would produce gets re-tagged. Keeps the
+  // matrix correct even after the bracket rule changes (e.g. switched from
+  // base-price-based to customer-total-based classification).
+  const all = await db.collection('reference_designs')
+    .find({})
+    .project({ id: 1, base_price: 1, budget_bracket: 1 })
     .toArray()
-  for (const r of missing) {
-    const b = bracketForPrice(r.base_price)
-    await db.collection('reference_designs').updateOne(
-      { id: r.id },
-      { $set: { budget_bracket: b.id, budget_bracket_label: b.label } },
-    )
+  let migrated = 0
+  for (const r of all) {
+    const b = classifyBracket(r.base_price)
+    if (r.budget_bracket !== b.id) {
+      await db.collection('reference_designs').updateOne(
+        { id: r.id },
+        { $set: { budget_bracket: b.id, budget_bracket_label: b.label } },
+      )
+      migrated++
+    }
   }
 
   const refs = await db.collection('reference_designs')
@@ -677,7 +704,7 @@ router.get('/admin/references/budget-coverage', asyncRoute(async (req, res, ok) 
   for (const o of occasions) occasionTotals[o] = 0
 
   for (const r of refs) {
-    const b = bracketForPrice(r.base_price)
+    const b = classifyBracket(r.base_price)
     const occ = (r.occasion || '').toLowerCase()
     if (matrix[b.id] && occasions.includes(occ)) {
       matrix[b.id][occ]            += 1
@@ -802,9 +829,12 @@ router.put('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
     }
   }
 
-  // If base_price changed, re-classify bracket
+  // If base_price changed, re-classify bracket based on the CUSTOMER total
+  // (not the bare decoration price). Keeps bracket label in sync with what
+  // customer actually sees and pays at checkout.
   if (updates.base_price !== undefined) {
-    const b = bracketForPrice(updates.base_price)
+    const breakdownForBracket = customerBreakdown(updates.base_price)
+    const b = bracketForPrice(breakdownForBracket.total)
     updates.budget_bracket       = b.id
     updates.budget_bracket_label = b.label
   }

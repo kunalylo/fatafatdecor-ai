@@ -896,34 +896,76 @@ def _build_style_transfer_prompt(occasion: str, theme: str, room_type: str, desc
     """
     Build the gpt-image-1 prompt for reference → room style transfer.
     The reference (image 2) is the visual STYLE the customer wants to recreate.
-    The customer's room (image 1) is the CANVAS — its structure must remain unchanged.
+    The customer's room (image 1) is the CANVAS — its structure MUST remain
+    pixel-identical except for the added decorations.
     """
     parts = [
-        f"Decorate the customer's room (image 1) in the EXACT decoration style shown in the reference image (image 2).",
+        "You are given TWO input images:",
+        "• IMAGE 1 = the customer's actual room photograph (the CANVAS).",
+        "• IMAGE 2 = a reference decoration photo (the STYLE GUIDE).",
         "",
-        "Match from the reference:",
-        "• Colour palette (every dominant colour used in the reference)",
-        "• Balloon density, clustering, and arrangement",
-        "• Backdrop style, position, and material (foil curtain / net / disco / etc.)",
-        "• Lighting mood and atmosphere",
-        "• Overall composition and focal points",
-        "• Decorative props, foil shapes, and floral elements visible",
+        "Your job: ADD decorations to the customer's room in the visual style of "
+        "the reference. Do NOT modify, replace, remove, restyle, or move ANYTHING "
+        "that is already present in image 1.",
         "",
-        "Adapt to the customer's room:",
-        "• Keep all existing furniture, walls, floor, ceiling structure UNCHANGED",
-        "• Scale decorations to the customer's actual room dimensions",
-        "• Place balloons and props naturally for the customer's wall layout",
-        "• The end result should look like a real professional decoration done in the customer's actual space — not a copy-paste of the reference",
+        "═══════════════════════════════════════════════════════════════",
+        "ABSOLUTE PRESERVATION RULES (image 1 — the customer's room):",
+        "═══════════════════════════════════════════════════════════════",
+        "• Walls, floor, ceiling, doors, windows: keep IDENTICAL — same colour, "
+        "same texture, same trim, same paint, same materials.",
+        "• ALL existing furniture (sofa, bed, table, chairs, dining set, kitchen "
+        "counter, TV unit, cabinet, shelf, bar cart, rug, lamps, etc.): keep "
+        "EXACTLY in the same position, orientation, scale, and condition.",
+        "• Existing fixtures (lights, fans, vents, switches, sockets, picture "
+        "frames, mirrors, appliances): preserve completely. Do not turn them "
+        "on/off, do not relocate them, do not redecorate them.",
+        "• Existing objects on tables, shelves, floor (bottles, books, vases, "
+        "plants, cushions, blankets): keep them where they are.",
+        "• The room's lighting can ONLY gain warm decorative glow from the "
+        "added decorations — do not change the existing daylight, lamps, "
+        "shadows, or time-of-day.",
+        "• Camera angle, perspective, lens, focal length, and proportions of "
+        "image 1 must remain IDENTICAL. Do not rotate, crop, or re-render the "
+        "room from a different angle.",
+        "",
+        "═══════════════════════════════════════════════════════════════",
+        "WHAT YOU MAY ADD (style copied from image 2):",
+        "═══════════════════════════════════════════════════════════════",
+        "• Balloons (latex, foil, chrome, confetti, etc.) — match the reference's "
+        "colour palette, density, and clustering style.",
+        "• Backdrops on a clear wall ONLY — foil curtain / net / disco / pleated "
+        "fabric / paper fans. Place against an empty wall section of image 1; "
+        "never over a window, door, TV, painting, or furniture.",
+        "• Foil shapes (numbers, letters, hearts, stars, bottles) — drawn from the "
+        "reference style.",
+        "• Light strings, LED curtains, fairy lights, neon signs — draped over "
+        "decorations, NOT replacing existing fixtures.",
+        "• Floral arrangements, ribbons, drapes, confetti — placed near or on "
+        "decorations only.",
+        "",
+        "═══════════════════════════════════════════════════════════════",
+        "STYLE TO MATCH (image 2 — the reference):",
+        "═══════════════════════════════════════════════════════════════",
+        "• Colour palette: every dominant colour in the reference.",
+        "• Density and clustering of balloons and props.",
+        "• Backdrop type, material, and placement style.",
+        "• Decorative composition and focal points.",
+        "• Overall mood and warmth of the celebration.",
         "",
     ]
-    if occasion: parts.append(f"Occasion: {occasion.replace('_', ' ')}.")
+    if occasion: parts.append(f"Occasion context: {occasion.replace('_', ' ')}.")
     if theme:    parts.append(f"Theme: {theme}.")
     if room_type:parts.append(f"Room type: {room_type}.")
     if description: parts.append(f"Customer special request: {description}.")
     parts.extend([
         "",
         STYLE_TRANSFER_NO_TEXT,
-        "Photorealistic, warm festive lighting matching the reference mood.",
+        "",
+        "Output a photorealistic image that looks like a real professional "
+        "decorator visited the customer's exact room (image 1) and added the "
+        "decorations on top. It must be unmistakably the SAME room — with "
+        "every piece of furniture, every wall, every light still there, only "
+        "now beautifully decorated.",
     ])
     return "\n".join(parts)
 
