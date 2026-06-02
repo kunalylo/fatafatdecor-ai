@@ -273,6 +273,87 @@ router.post('/dp/complete', requireDp, asyncRoute(async (req, res, ok, err) => {
   return ok({ success: true, completed_at: completedAt })
 }))
 
+// POST /dp/completion-photos — decorator uploads photos of the finished work.
+// Body: { order_id, photos: [base64 data URLs] }  — max 6 photos per call.
+// Persists URLs on order.completion_photos[]. Visible to customer + admin.
+router.post('/dp/completion-photos', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db   = await connectToMongo()
+  const dpId = req.dpId
+  const { order_id, photos } = req.body || {}
+  if (!order_id) return err('order_id required')
+  if (!Array.isArray(photos) || photos.length === 0) return err('photos[] required')
+  if (photos.length > 6) return err('Max 6 photos per upload', 400)
+
+  const order = await assertDpOwnsOrder(db, order_id, dpId, res)
+  if (!order) return
+
+  const { IMAGEKIT_PRIVATE_KEY } = await import('../config.js')
+  if (!IMAGEKIT_PRIVATE_KEY) return err('Image storage not configured', 500)
+  const ikAuth = Buffer.from(IMAGEKIT_PRIVATE_KEY + ':').toString('base64')
+
+  const existing = Array.isArray(order.completion_photos) ? order.completion_photos : []
+  const uploaded = []
+
+  for (let i = 0; i < photos.length; i++) {
+    try {
+      const raw = String(photos[i] || '')
+      const b64 = raw.startsWith('data:') ? raw.split(',')[1] : raw
+      if (!b64) continue
+      const idx = existing.length + uploaded.length + 1
+      const ikBody = new URLSearchParams()
+      ikBody.append('file', b64)
+      ikBody.append('fileName', `completion_${order_id.slice(0, 8)}_${idx}_${Date.now()}.jpg`)
+      ikBody.append('folder', '/completion')
+      const ikRes = await fetch('https://upload.imagekit.io/api/v1/files/upload', {
+        method: 'POST',
+        headers: { 'Authorization': `Basic ${ikAuth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: ikBody.toString(),
+      })
+      const ikData = await ikRes.json()
+      if (ikData.url) {
+        uploaded.push({
+          url: ikData.url,
+          file_id: ikData.fileId || null,
+          uploaded_by: dpId,
+          uploaded_at: new Date(),
+        })
+      }
+    } catch (e) {
+      console.warn('[completion-photos] upload failed:', e.message)
+    }
+  }
+
+  if (uploaded.length === 0) return err('All uploads failed. Please try again.', 500)
+
+  await db.collection('orders').updateOne(
+    { id: order_id },
+    { $push: { completion_photos: { $each: uploaded } } },
+  )
+
+  return ok({
+    success: true,
+    uploaded: uploaded.length,
+    total:    existing.length + uploaded.length,
+    photos:   uploaded,
+  })
+}))
+
+// DELETE /dp/completion-photos/:order_id/:index — remove a completion photo by index
+router.delete('/dp/completion-photos/:order_id/:index', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db   = await connectToMongo()
+  const dpId = req.dpId
+  const idx  = parseInt(req.params.index, 10)
+  if (!Number.isInteger(idx) || idx < 0) return err('Invalid index', 400)
+
+  const order = await assertDpOwnsOrder(db, req.params.order_id, dpId, res)
+  if (!order) return
+  const photos = Array.isArray(order.completion_photos) ? [...order.completion_photos] : []
+  if (idx >= photos.length) return err('Photo index out of range', 404)
+  photos.splice(idx, 1)
+  await db.collection('orders').updateOne({ id: req.params.order_id }, { $set: { completion_photos: photos } })
+  return ok({ success: true, total: photos.length })
+}))
+
 // POST /dp/collect-payment
 router.post('/dp/collect-payment', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()

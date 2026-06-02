@@ -18,7 +18,7 @@ router.get('/budget-brackets', asyncRoute(async (req, res, ok) => {
   return ok({ brackets: BUDGET_BRACKETS })
 }))
 
-async function uploadToImageKit(base64OrUrl, designId) {
+async function uploadToImageKit(base64OrUrl, designId, folder = '/generated', fileName = null) {
   try {
     const falBase64 = base64OrUrl.startsWith('data:')
       ? base64OrUrl.split(',')[1]
@@ -26,8 +26,8 @@ async function uploadToImageKit(base64OrUrl, designId) {
     const ikAuth = Buffer.from(IMAGEKIT_PRIVATE_KEY + ':').toString('base64')
     const ikBody = new URLSearchParams()
     ikBody.append('file', falBase64)
-    ikBody.append('fileName', `design_${designId}.jpg`)
-    ikBody.append('folder', '/generated')
+    ikBody.append('fileName', fileName || `design_${designId}.jpg`)
+    ikBody.append('folder', folder)
     const ikRes  = await fetch('https://upload.imagekit.io/api/v1/files/upload', {
       method: 'POST',
       headers: { 'Authorization': `Basic ${ikAuth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -305,7 +305,18 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
 
   const designId = uuidv4()
   let decoratedImageUrl = null
+  let originalImageUrl  = null
   let aiSucceeded = false
+
+  // Upload customer's room photo to ImageKit in parallel with AI call.
+  // This is what the decorator sees on the job sheet — the actual canvas
+  // (raw photo of the customer's space) alongside the reference + AI preview.
+  const originalUploadPromise = uploadToImageKit(
+    original_image,
+    designId,
+    '/rooms',
+    `room_${designId}.jpg`,
+  ).catch(e => { console.warn('[generate-from-reference] room photo upload failed:', e.message); return null })
 
   // ── Style transfer via FastAPI multi-image gpt-image-1 ──────────────
   try {
@@ -328,9 +339,13 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
     const data = await styleRes.json()
     if (!data.success || !data.image_url) throw new Error(data.detail || 'Style transfer failed')
 
-    // Upload to ImageKit
-    const uploaded = await uploadToImageKit(data.image_url, designId)
+    // Upload AI result + finalize the parallel room-photo upload
+    const [uploaded, roomUrl] = await Promise.all([
+      uploadToImageKit(data.image_url, designId),
+      originalUploadPromise,
+    ])
     decoratedImageUrl = uploaded || data.image_url
+    originalImageUrl  = roomUrl
     aiSucceeded = true
   } catch (e) {
     console.error('[generate-from-reference] AI error:', e.message)
@@ -362,7 +377,8 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
     room_type,
     occasion,
     description: safeDescription,
-    original_image: '[uploaded]',          // don't store the raw data URL
+    original_image: '[uploaded]',          // legacy placeholder (raw data URL not stored)
+    original_image_url: originalImageUrl,  // ImageKit URL of the customer's room photo — shown to decorator
     decorated_image: decoratedImageUrl,
 
     // Reference linkage

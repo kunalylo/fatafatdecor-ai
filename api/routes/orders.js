@@ -64,7 +64,10 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
     reference_design_id:     design.reference_design_id     || null,
     reference_image_url:     design.reference_image_url     || null,
     reference_thumbnail_url: design.reference_thumbnail_url || null,
+    original_image_url:      design.original_image_url      || null,
+    decorated_image:         design.decorated_image          || null,
     customer_breakdown:      design.customer_breakdown       || null,
+    completion_photos:       [],                              // filled by decorator on completion
     created_at: new Date(),
   }
   await db.collection('orders').insertOne(order)
