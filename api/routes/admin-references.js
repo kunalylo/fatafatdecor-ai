@@ -547,6 +547,11 @@ router.get('/admin/references', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   const { occasion, setup_type, status, theme, bracket, page = 1, limit = 30, sort = 'recent' } = req.query
 
+  // Idempotently re-tag any reference whose bracket is stale (e.g. uploaded
+  // before the customer-total bracket rule). Keeps the filter result correct
+  // even when this endpoint is called before /budget-coverage.
+  await autoRebuildBrackets(db)
+
   const filter = {}
   // Occasion filter matches either the legacy single-value field OR any element
   // in the new occasions[] array.
@@ -628,6 +633,28 @@ function classifyBracket(basePrice) {
   return bracketForPrice(breakdown.total)
 }
 
+// Walks every reference and re-tags any whose budget_bracket no longer matches
+// the current classifyBracket() rule. Idempotent — safe to call frequently.
+// Returns { scanned, migrated }.
+async function autoRebuildBrackets(db) {
+  const all = await db.collection('reference_designs')
+    .find({})
+    .project({ id: 1, base_price: 1, budget_bracket: 1 })
+    .toArray()
+  let migrated = 0
+  for (const r of all) {
+    const b = classifyBracket(r.base_price)
+    if (r.budget_bracket !== b.id) {
+      await db.collection('reference_designs').updateOne(
+        { id: r.id },
+        { $set: { budget_bracket: b.id, budget_bracket_label: b.label } },
+      )
+      migrated++
+    }
+  }
+  return { scanned: all.length, migrated }
+}
+
 // POST /admin/references/backfill-brackets — recompute bracket for every reference
 // using the current rule (customer total). Safe to re-run; pass ?force=true to
 // re-tag even references that already have a bracket set.
@@ -660,25 +687,8 @@ router.post('/admin/references/backfill-brackets', asyncRoute(async (req, res, o
 router.get('/admin/references/budget-coverage', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
 
-  // Auto-rebuild brackets: any reference whose stored budget_bracket no longer
-  // matches what classifyBracket() would produce gets re-tagged. Keeps the
-  // matrix correct even after the bracket rule changes (e.g. switched from
-  // base-price-based to customer-total-based classification).
-  const all = await db.collection('reference_designs')
-    .find({})
-    .project({ id: 1, base_price: 1, budget_bracket: 1 })
-    .toArray()
-  let migrated = 0
-  for (const r of all) {
-    const b = classifyBracket(r.base_price)
-    if (r.budget_bracket !== b.id) {
-      await db.collection('reference_designs').updateOne(
-        { id: r.id },
-        { $set: { budget_bracket: b.id, budget_bracket_label: b.label } },
-      )
-      migrated++
-    }
-  }
+  // Auto-rebuild brackets so the matrix is always correct
+  await autoRebuildBrackets(db)
 
   const refs = await db.collection('reference_designs')
     .find({ active: true })
