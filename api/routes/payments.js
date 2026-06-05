@@ -26,10 +26,16 @@ router.post('/payments/create-order', requireUser, asyncRoute(async (req, res, o
     if (!Number.isInteger(cc) || cc <= 0 || cc > 50) return err('Invalid credits count', 400)
   }
 
-  // If paying for a specific order, verify it belongs to this user
+  // If paying for a specific order, verify it belongs to this user.
+  // Delivery orders live in `draft_orders` until paid (fall back to `orders` for legacy rows).
   if (order_id) {
-    const coll = type === 'gift_delivery' ? 'gift_orders' : 'orders'
-    const order = await db.collection(coll).findOne({ id: order_id })
+    let order
+    if (type === 'gift_delivery') {
+      order = await db.collection('gift_orders').findOne({ id: order_id })
+    } else {
+      order = await db.collection('draft_orders').findOne({ id: order_id })
+        || await db.collection('orders').findOne({ id: order_id })
+    }
     if (!order) return err('Order not found', 404)
     if (order.user_id !== user_id) return err('Not authorized', 403)
   }
@@ -54,12 +60,62 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
   const payment = await db.collection('payments').findOne({ razorpay_order_id })
   if (!payment) return err('Payment not found', 404)
   if (payment.user_id !== req.userId) return err('Not authorized', 403)
-  if (payment.status === 'verified') return ok({ success: true, type: payment.type, message: 'Already verified' })
 
-  await db.collection('payments').updateOne(
-    { razorpay_order_id },
+  // ── Promote the draft order → real `orders` collection (idempotent, final paid state) ──
+  // Runs on EVERY verify call (even retries) BEFORE the payment is claimed, so a crashed or
+  // retried verify can never leave the customer paid with no order. Only paid orders ever
+  // reach `orders`; unpaid/abandoned drafts stay in `draft_orders`.
+  if (payment.type === 'delivery' && payment.order_id) {
+    const existing = await db.collection('orders').findOne({ id: payment.order_id })
+    if (existing) {
+      await db.collection('orders').updateOne(
+        { id: payment.order_id },
+        { $set: { payment_status: 'partial', payment_amount: payment.amount, delivery_status: 'pending' } }
+      )
+    } else {
+      const draft = await db.collection('draft_orders').findOne({ id: payment.order_id })
+      if (!draft) return err('Order not found', 404)
+      const { _id, ...draftOrder } = draft
+      try {
+        // Upsert the final paid state in one write — no transient "pending" window.
+        await db.collection('orders').updateOne(
+          { id: payment.order_id },
+          { $setOnInsert: { ...draftOrder, payment_status: 'partial', payment_amount: payment.amount, delivery_status: 'pending' } },
+          { upsert: true }
+        )
+      } catch (e) {
+        if (e.code !== 11000) throw e   // lost the insert race to a concurrent verify — order already exists
+        await db.collection('orders').updateOne(
+          { id: payment.order_id },
+          { $set: { payment_status: 'partial', payment_amount: payment.amount, delivery_status: 'pending' } }
+        )
+      }
+    }
+    await db.collection('draft_orders').deleteOne({ id: payment.order_id })
+  }
+
+  // ── Mark the gift order paid BEFORE the claim (idempotent), mirroring the delivery promote ──
+  // A crash/retry can then never leave a paid gift order stuck as unpaid (which would block
+  // slot booking). Amount validation happens here, before the payment is ever marked verified.
+  if (payment.type === 'gift_delivery' && payment.order_id) {
+    const giftOrder = await db.collection('gift_orders').findOne({ id: payment.order_id })
+    if (!giftOrder) return err('Gift order not found', 404)
+    if (payment.amount < giftOrder.gift_total) return err('Payment amount less than gift order total', 400)
+    await db.collection('gift_orders').updateOne(
+      { id: payment.order_id },
+      { $set: { payment_status: 'full', payment_amount: payment.amount } }
+    )
+  }
+
+  // ── Atomically claim the payment so the side-effects below run EXACTLY once ──
+  // Only a freshly-created payment may transition to verified — a 'failed' (user-cancelled) or
+  // already-'verified' record won't re-trigger side-effects. The first caller wins; concurrent/
+  // retried calls return here. Prevents double credit award / stock decrement / decorator assignment.
+  const claim = await db.collection('payments').updateOne(
+    { razorpay_order_id, status: 'created' },
     { $set: { status: 'verified', razorpay_payment_id, razorpay_signature, verified_at: new Date() } }
   )
+  if (claim.modifiedCount === 0) return ok({ success: true, type: payment.type, message: 'Already verified' })
 
   if (payment.type === 'credits') {
     await db.collection('users').updateOne(
@@ -68,11 +124,7 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
     )
   }
   if (payment.type === 'delivery' && payment.order_id) {
-    await db.collection('orders').updateOne(
-      { id: payment.order_id },
-      { $set: { payment_status: 'partial', payment_amount: payment.amount } }
-    )
-    // Mark design as 'ordered' NOW that payment succeeded (not at order creation)
+    // Order is already promoted to its final paid state above — just run one-time side-effects.
     const paidOrder = await db.collection('orders').findOne({ id: payment.order_id })
     if (paidOrder?.design_id) {
       await db.collection('designs').updateOne({ id: paidOrder.design_id }, { $set: { status: 'ordered' } })
@@ -133,13 +185,8 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
     }
   }
   if (payment.type === 'gift_delivery' && payment.order_id) {
-    // Validate payment amount covers the gift order total
+    // Gift order already marked paid above — run one-time side-effects (notify + assign decorators).
     const giftOrder = await db.collection('gift_orders').findOne({ id: payment.order_id })
-    if (giftOrder && payment.amount < giftOrder.gift_total) return err('Payment amount less than gift order total', 400)
-    await db.collection('gift_orders').updateOne(
-      { id: payment.order_id },
-      { $set: { payment_status: 'full', payment_amount: payment.amount } }
-    )
     const giftPayUser = await db.collection('users').findOne({ id: payment.user_id })
     if (giftPayUser?.phone) await sendWhatsApp(giftPayUser.phone, `FatafatDecor: Gift order payment of Rs.${payment.amount} received! Your gift delivery is confirmed. -FatafatDecor`)
     if (giftPayUser?.email) {

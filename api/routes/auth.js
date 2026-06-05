@@ -301,6 +301,7 @@ router.post('/auth/delete-account', asyncRoute(async (req, res, ok, err) => {
   if (!user) return err('Invalid credentials', 401)
   await db.collection('users').deleteOne({ id: user.id })
   await db.collection('orders').deleteMany({ user_id: user.id })
+  await db.collection('draft_orders').deleteMany({ user_id: user.id })
   await db.collection('designs').deleteMany({ user_id: user.id })
   await db.collection('gift_orders').deleteMany({ user_id: user.id })
   await db.collection('payments').deleteMany({ user_id: user.id })

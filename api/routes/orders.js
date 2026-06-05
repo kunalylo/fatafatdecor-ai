@@ -19,8 +19,8 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
   if (!design) return err('Design not found', 404)
   if (design.user_id && design.user_id !== user_id) return err('Design does not belong to this user', 403)
 
-  // Reuse existing unpaid order for same design (prevents duplicates on payment retry)
-  const existingOrder = await db.collection('orders').findOne({ design_id, user_id, payment_status: 'pending' })
+  // Reuse existing unpaid draft for the same design (prevents duplicate drafts on retry)
+  const existingOrder = await db.collection('draft_orders').findOne({ design_id, user_id, payment_status: 'pending' })
   if (existingOrder) {
     const { _id, ...cleanExisting } = existingOrder
     return ok(cleanExisting)
@@ -71,9 +71,10 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
     completion_photos:       [],                              // filled by decorator on completion
     created_at: new Date(),
   }
-  await db.collection('orders').insertOne(order)
-  // Decorators are assigned + notified only after payment verification (/payments/verify).
-  // This prevents spurious requests when the user backs out or payment fails.
+  // Stored as a DRAFT until payment succeeds — keeps the `orders` collection free of
+  // unpaid/abandoned rows. /payments/verify promotes it into `orders` once paid.
+  // Decorators are assigned + notified only at that point.
+  await db.collection('draft_orders').insertOne(order)
 
   const { _id, ...clean } = order
   return ok(clean)
@@ -81,15 +82,27 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
 
 // GET /orders — requires JWT, only returns own orders
 router.get('/orders', requireUser, asyncRoute(async (req, res, ok) => {
-  const db     = await connectToMongo()
-  const orders = await db.collection('orders').find({ user_id: req.userId }).sort({ created_at: -1 }).limit(50).toArray()
-  return ok(orders.map(({ _id, ...o }) => o))
+  const db = await connectToMongo()
+  // Include the user's own unpaid draft so the order stays visible/resumable between
+  // creation and payment. "Real order" lists filter payment_status:'pending' in the UI.
+  const [paid, drafts] = await Promise.all([
+    db.collection('orders').find({ user_id: req.userId }).sort({ created_at: -1 }).limit(50).toArray(),
+    db.collection('draft_orders').find({ user_id: req.userId }).sort({ created_at: -1 }).limit(20).toArray(),
+  ])
+  // Prefer the paid copy if a draft + paid order briefly coexist for the same id (mid-promotion).
+  const seen = new Set()
+  const all = [...paid, ...drafts]
+    .filter(o => (seen.has(o.id) ? false : seen.add(o.id)))
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, 50)
+  return ok(all.map(({ _id, ...o }) => o))
 }))
 
 // GET /orders/:id — requires JWT, only returns own order
 router.get('/orders/:id', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db    = await connectToMongo()
   const order = await db.collection('orders').findOne({ id: req.params.id })
+    || await db.collection('draft_orders').findOne({ id: req.params.id })   // unpaid draft fallback
   if (!order) return err('Order not found', 404)
   if (order.user_id !== req.userId) return err('Not authorized', 403)
   const { _id, ...clean } = order
