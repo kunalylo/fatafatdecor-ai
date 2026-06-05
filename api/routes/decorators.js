@@ -4,7 +4,8 @@ import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
 import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute } from '../helpers.js'
 import { signToken, requireDp, requireAdmin } from '../jwt.js'
-import { VAPID_PUBLIC_KEY } from '../config.js'
+import { VAPID_PUBLIC_KEY, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } from '../config.js'
+import Razorpay from 'razorpay'
 
 const router = Router()
 
@@ -373,6 +374,53 @@ router.post('/dp/collect-payment', requireDp, asyncRoute(async (req, res, ok, er
   )
   const { _id, ...clean } = collection
   return ok(clean)
+}))
+
+// POST /dp/collect-payment/create-online — start a real online payment for the
+// remaining balance. Decorator-initiated; customer pays via Razorpay (UPI/card/QR).
+router.post('/dp/collect-payment/create-online', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const dpId = req.dpId
+  const { order_id } = req.body
+  if (!order_id) return err('order_id required')
+  const order = await assertDpOwnsOrder(db, order_id, dpId, res)
+  if (!order) return
+  if (order.payment_status === 'full') return err('Order already fully paid', 400)
+  const remaining = Math.round((order.total_cost || 0) - (order.payment_amount || 0))
+  if (remaining <= 0) return err('Nothing remaining to collect', 400)
+  const rzp = new Razorpay({ key_id: RAZORPAY_KEY_ID, key_secret: RAZORPAY_KEY_SECRET })
+  const rzpOrder = await rzp.orders.create({ amount: remaining * 100, currency: 'INR', receipt: `dpcol_${order_id.slice(0, 8)}` })
+  const payment = { id: uuidv4(), type: 'dp_collection', user_id: order.user_id, dp_id: dpId, order_id, amount: remaining, razorpay_order_id: rzpOrder.id, status: 'created', created_at: new Date() }
+  await db.collection('payments').insertOne(payment)
+  return ok({ razorpay_order_id: rzpOrder.id, amount: rzpOrder.amount, currency: 'INR', payment_id: payment.id, razorpay_key_id: RAZORPAY_KEY_ID, remaining })
+}))
+
+// POST /dp/collect-payment/verify-online — verify Razorpay signature, mark order paid
+router.post('/dp/collect-payment/verify-online', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const dpId = req.dpId
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) return err('Missing payment fields', 400)
+  const expected = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET).update(razorpay_order_id + '|' + razorpay_payment_id).digest('hex')
+  if (expected !== razorpay_signature) return err('Payment verification failed', 400)
+  const payment = await db.collection('payments').findOne({ razorpay_order_id })
+  if (!payment) return err('Payment not found', 404)
+  if (payment.dp_id !== dpId) return err('Not authorized', 403)
+  const order = await assertDpOwnsOrder(db, payment.order_id, dpId, res)
+  if (!order) return
+  if (payment.status !== 'verified') {
+    await db.collection('payments').updateOne(
+      { razorpay_order_id },
+      { $set: { status: 'verified', razorpay_payment_id, razorpay_signature, verified_at: new Date() } }
+    )
+    // Online → money goes straight to the company, so mark deposited:true (never counts as cash-to-deposit)
+    await db.collection('dp_collections').insertOne({ id: uuidv4(), order_id: payment.order_id, dp_id: dpId, amount: payment.amount, method: 'online', deposited: true, razorpay_payment_id, created_at: new Date() })
+    await db.collection('orders').updateOne(
+      { id: payment.order_id },
+      { $set: { payment_status: 'full', remaining_collected: true, collection_method: 'online', payment_amount: (order.payment_amount || 0) + payment.amount } }
+    )
+  }
+  return ok({ success: true })
 }))
 
 // POST /dp/deposit-cash
