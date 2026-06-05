@@ -5,6 +5,7 @@ import Razorpay from 'razorpay'
 import { connectToMongo } from '../db.js'
 import { requireUser } from '../jwt.js'
 import { sendWhatsApp, sendOrderBookedEmail, sendPaymentReceiptEmail, asyncRoute } from '../helpers.js'
+import { sendPushToDecorator } from '../push.js'
 import { RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } from '../config.js'
 
 const router = Router()
@@ -121,6 +122,12 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
         )
         for (const dp of availablePersons) {
           if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor NEW ORDER #${payment.order_id.slice(0, 8)}: ${paidOrder.delivery_address || 'Address not set'}. Amount: Rs.${paidOrder.total_cost}. Open your decorator app now to accept! -FatafatDecor`)
+          sendPushToDecorator(db, dp.id, {
+            title: '🎉 New order available!',
+            body: `New booking · Rs.${paidOrder.total_cost} · ${(paidOrder.delivery_address || 'Tap to view').slice(0, 60)}. Accept before another decorator does.`,
+            tag: `fd-order-${payment.order_id.slice(0, 8)}`,
+            url: '/',
+          }).catch(() => {})
         }
       }
     }
@@ -152,6 +159,12 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
         )
         for (const dp of activePersons) {
           if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor GIFT ORDER #${payment.order_id.slice(0, 8)}: ${giftOrder.delivery_address || 'Address not set'}. Amount: Rs.${giftOrder.gift_total}. Open your decorator app now to accept! -FatafatDecor`)
+          sendPushToDecorator(db, dp.id, {
+            title: '🎁 New gift order!',
+            body: `Gift delivery · Rs.${giftOrder.gift_total} · ${(giftOrder.delivery_address || 'Tap to view').slice(0, 60)}. Tap to accept.`,
+            tag: `fd-gift-${payment.order_id.slice(0, 8)}`,
+            url: '/',
+          }).catch(() => {})
         }
       }
     }

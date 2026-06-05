@@ -4,6 +4,7 @@ import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
 import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute } from '../helpers.js'
 import { signToken, requireDp, requireAdmin } from '../jwt.js'
+import { VAPID_PUBLIC_KEY } from '../config.js'
 
 const router = Router()
 
@@ -482,6 +483,41 @@ router.post('/dp/accept-order', requireDp, asyncRoute(async (req, res, ok, err) 
   if (!order.delivery_person_id) update.$set = { delivery_person_id: dpId, delivery_status: 'assigned' }
   await db.collection('orders').updateOne({ id: order_id }, update)
   return ok({ success: true, message: 'Order accepted successfully' })
+}))
+
+// ── Web Push (decorator notifications) ──────────────────────────
+// Public: the decorator app fetches the VAPID public key before subscribing.
+router.get('/push/vapid-public-key', asyncRoute(async (req, res, ok) => {
+  return ok({ public_key: VAPID_PUBLIC_KEY || null })
+}))
+
+// POST /dp/push-subscribe — save this device's push subscription (dedup by endpoint)
+router.post('/dp/push-subscribe', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const { subscription } = req.body
+  if (!subscription || !subscription.endpoint) return err('subscription with endpoint required')
+  // Drop any stale entry for this endpoint, then store the fresh one (keys can rotate)
+  await db.collection('delivery_persons').updateOne(
+    { id: req.dpId },
+    { $pull: { push_subscriptions: { endpoint: subscription.endpoint } } },
+  )
+  await db.collection('delivery_persons').updateOne(
+    { id: req.dpId },
+    { $push: { push_subscriptions: { ...subscription, subscribed_at: new Date() } } },
+  )
+  return ok({ success: true })
+}))
+
+// POST /dp/push-unsubscribe — remove this device's subscription (on logout)
+router.post('/dp/push-unsubscribe', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const { endpoint } = req.body
+  if (!endpoint) return err('endpoint required')
+  await db.collection('delivery_persons').updateOne(
+    { id: req.dpId },
+    { $pull: { push_subscriptions: { endpoint } } },
+  )
+  return ok({ success: true })
 }))
 
 // POST /dp/decline-order

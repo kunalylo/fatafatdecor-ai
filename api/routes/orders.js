@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { connectToMongo } from '../db.js'
 import { requireUser } from '../jwt.js'
 import { sendWhatsApp, asyncRoute } from '../helpers.js'
+import { sendPushToDecorator } from '../push.js'
 
 const router = Router()
 
@@ -125,6 +126,14 @@ router.post('/orders/auto-reassign', requireUser, asyncRoute(async (req, res, ok
   const reassignedIds    = [...currentIds, ...fresh.map(p => p.id)]
   const reassignedInfo   = [...(order.assigned_decorators_info || []), ...fresh.map(p => ({ id: p.id, name: p.name, phone: p.phone }))]
   await db.collection('orders').updateOne({ id: order_id }, { $set: { assigned_decorators: reassignedIds, assigned_decorators_info: reassignedInfo, last_reassigned_at: new Date() } })
+  for (const dp of fresh) {
+    sendPushToDecorator(db, dp.id, {
+      title: '🎉 New order available!',
+      body: `A booking is waiting · Rs.${order.total_cost}. Tap to accept.`,
+      tag: `fd-order-${order_id.slice(0, 8)}`,
+      url: '/',
+    }).catch(() => {})
+  }
   const orderUser = await db.collection('users').findOne({ id: order.user_id })
   if (orderUser?.phone) await sendWhatsApp(orderUser.phone, `FatafatDecor: We are finding the best decorator for your order. Please wait a few more minutes. -FatafatDecor`)
   return ok({ reassigned: true, new_decorators: fresh.length })

@@ -14,6 +14,11 @@ export const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || 
 export const WHATSAPP_ACCESS_TOKEN    = process.env.WHATSAPP_ACCESS_TOKEN    || ''
 export const SEED_SECRET      = process.env.SEED_SECRET       || ''
 export const RESEND_API_KEY   = process.env.RESEND_API_KEY    || ''
+// Web Push (VAPID) — decorator new-order notifications. Generate with:
+//   npx web-push generate-vapid-keys
+export const VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY  || ''
+export const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || ''
+export const VAPID_SUBJECT     = process.env.VAPID_SUBJECT     || 'mailto:support@fatafatdecor.com'
 
 export function getImageKitFolder(budget_min, budget_max) {
   const avg = (Number(budget_min) + Number(budget_max)) / 2
