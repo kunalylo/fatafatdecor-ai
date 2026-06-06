@@ -185,8 +185,15 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
     }
   }
   if (payment.type === 'gift_delivery' && payment.order_id) {
-    // Gift order already marked paid above — run one-time side-effects (notify + assign decorators).
+    // Gift order already marked paid above — run one-time side-effects (stock, notify, assign).
     const giftOrder = await db.collection('gift_orders').findOne({ id: payment.order_id })
+    // Decrement stock now that payment is confirmed (gift orders reserve here, not at creation)
+    if (giftOrder && !giftOrder.stock_reserved && Array.isArray(giftOrder.gift_items)) {
+      for (const gi of giftOrder.gift_items) {
+        if (gi.gift_id) await db.collection('gifts').updateOne({ id: gi.gift_id }, { $inc: { stock: -(Number(gi.quantity) || 1) } }).catch(() => {})
+      }
+      await db.collection('gift_orders').updateOne({ id: payment.order_id }, { $set: { stock_reserved: true } })
+    }
     const giftPayUser = await db.collection('users').findOne({ id: payment.user_id })
     if (giftPayUser?.phone) await sendWhatsApp(giftPayUser.phone, `FatafatDecor: Gift order payment of Rs.${payment.amount} received! Your gift delivery is confirmed. -FatafatDecor`)
     if (giftPayUser?.email) {

@@ -18,6 +18,7 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
   const design = await db.collection('designs').findOne({ id: design_id })
   if (!design) return err('Design not found', 404)
   if (design.user_id && design.user_id !== user_id) return err('Design does not belong to this user', 403)
+  if (!delivery_address || !String(delivery_address).trim()) return err('Delivery address is required', 400)
 
   // Reuse existing unpaid draft for the same design (prevents duplicate drafts on retry)
   const existingOrder = await db.collection('draft_orders').findOne({ design_id, user_id, payment_status: 'pending' })

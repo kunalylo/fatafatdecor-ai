@@ -289,6 +289,11 @@ router.post('/auth/delete-account', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
   const { email, password, google_id, apple_account } = req.body
   if (!email) return err('Email required')
+  // Rate limit: max 5 delete attempts per email per 15 minutes (prevent brute-force deletion)
+  const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000)
+  const delAttempts = await db.collection('delete_attempts').findOne({ email })
+  if (delAttempts && delAttempts.count >= 5 && new Date(delAttempts.updated_at) > fifteenMinAgo)
+    return err('Too many attempts. Please try again in 15 minutes.', 429)
   let user
   if (google_id) {
     user = await db.collection('users').findOne({ email, google_id })
@@ -298,7 +303,15 @@ router.post('/auth/delete-account', asyncRoute(async (req, res, ok, err) => {
     if (!password) return err('Email and password required')
     user = await db.collection('users').findOne({ email, password: hashPwd(password) })
   }
-  if (!user) return err('Invalid credentials', 401)
+  if (!user) {
+    await db.collection('delete_attempts').updateOne(
+      { email },
+      { $inc: { count: 1 }, $set: { updated_at: new Date() }, $setOnInsert: { created_at: new Date() } },
+      { upsert: true }
+    )
+    return err('Invalid credentials', 401)
+  }
+  await db.collection('delete_attempts').deleteOne({ email })
   await db.collection('users').deleteOne({ id: user.id })
   await db.collection('orders').deleteMany({ user_id: user.id })
   await db.collection('draft_orders').deleteMany({ user_id: user.id })

@@ -12,21 +12,37 @@ router.post('/gift-orders', requireUser, asyncRoute(async (req, res, ok, err) =>
   const user_id = req.userId
   const { delivery_address, delivery_landmark, delivery_lat, delivery_lng, gift_items, gift_message } = req.body
   if (!Array.isArray(gift_items) || gift_items.length === 0) return err('gift_items array required')
+  if (!delivery_address || !String(delivery_address).trim()) return err('Delivery address is required', 400)
 
-  // Stock validation — check each gift has enough stock
+  // Validate stock + price every item from the catalog (never trust client-sent prices)
   const giftIds = gift_items.map(g => g.gift_id)
   const dbGifts = await db.collection('gifts').find({ id: { $in: giftIds } }).toArray()
   const giftMap = Object.fromEntries(dbGifts.map(g => [g.id, g]))
+  const pricedItems = []
   for (const item of gift_items) {
     const dbGift = giftMap[item.gift_id]
     if (!dbGift) return err(`Gift "${item.name}" is no longer available`, 400)
-    if (dbGift.stock !== undefined && dbGift.stock < (item.quantity || 1))
+    const qty = Math.max(1, Number(item.quantity) || 1)
+    if (dbGift.stock !== undefined && dbGift.stock < qty)
       return err(`"${item.name}" has only ${dbGift.stock} left in stock`, 400)
+    const price = Number(dbGift.price ?? dbGift.selling_price ?? item.price) || 0
+    pricedItems.push({ ...item, quantity: qty, price })
+  }
+  const giftTotal = pricedItems.reduce((s, g) => s + g.price * g.quantity, 0)
+
+  // Idempotency: reuse an identical unpaid gift order from the last 2 min (double-tap / retry)
+  const sig = pricedItems.map(g => `${g.gift_id}:${g.quantity}`).sort().join('|')
+  const recent = await db.collection('gift_orders').findOne(
+    { user_id, payment_status: 'pending', created_at: { $gte: new Date(Date.now() - 2 * 60 * 1000) } },
+    { sort: { created_at: -1 } },
+  )
+  if (recent) {
+    const recentSig = (recent.gift_items || []).map(g => `${g.gift_id}:${g.quantity || 1}`).sort().join('|')
+    if (recentSig === sig) { const { _id, ...clean } = recent; return ok(clean) }
   }
 
-  const giftTotal = gift_items.reduce((s, g) => s + (Number(g.price) || 0) * (Number(g.quantity) || 1), 0)
   const giftOrder = {
-    id: uuidv4(), user_id, order_type: 'gift', gift_items, gift_total: giftTotal,
+    id: uuidv4(), user_id, order_type: 'gift', gift_items: pricedItems, gift_total: giftTotal,
     gift_message: gift_message || '',
     delivery_address: delivery_address || '', delivery_landmark: delivery_landmark || '',
     delivery_location: { lat: delivery_lat || null, lng: delivery_lng || null },
@@ -35,12 +51,8 @@ router.post('/gift-orders', requireUser, asyncRoute(async (req, res, ok, err) =>
     assigned_decorators: [], accepted_decorators: [], created_at: new Date(),
   }
   await db.collection('gift_orders').insertOne(giftOrder)
-
-  // Decrement stock for each item
-  const stockOps = gift_items.map(item =>
-    db.collection('gifts').updateOne({ id: item.gift_id }, { $inc: { stock: -(item.quantity || 1) } })
-  )
-  await Promise.allSettled(stockOps)
+  // Stock is decremented only after payment is confirmed (in /payments/verify) so abandoned
+  // gift orders never leak inventory.
 
   const { _id, ...clean } = giftOrder
   return ok(clean)
@@ -69,13 +81,15 @@ router.get('/gift-orders/:id', requireUser, asyncRoute(async (req, res, ok, err)
 // POST /gift-orders/:id/request-slot — requires JWT
 router.post('/gift-orders/:id/request-slot', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { date, hour } = req.body
+  const { date, hour, gift_message } = req.body
   if (!date || hour === undefined) return err('date and hour required')
   const order = await db.collection('gift_orders').findOne({ id: req.params.id })
   if (!order) return err('Gift order not found', 404)
   if (order.user_id !== req.userId) return err('Not authorized', 403)
   if (order.payment_status !== 'full') return err('Gift order must be paid before booking a slot', 402)
-  await db.collection('gift_orders').updateOne({ id: req.params.id }, { $set: { requested_slot: { date, hour }, delivery_slot: { date, hour } } })
+  const setFields = { requested_slot: { date, hour }, delivery_slot: { date, hour } }
+  if (typeof gift_message === 'string') setFields.gift_message = gift_message.slice(0, 500)
+  await db.collection('gift_orders').updateOne({ id: req.params.id }, { $set: setFields })
   return ok({ success: true })
 }))
 
