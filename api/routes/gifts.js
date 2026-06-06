@@ -81,7 +81,7 @@ router.get('/gift-orders/:id', requireUser, asyncRoute(async (req, res, ok, err)
 // POST /gift-orders/:id/request-slot — requires JWT
 router.post('/gift-orders/:id/request-slot', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { date, hour, gift_message } = req.body
+  const { date, hour, gift_message, delivery_type } = req.body
   if (!date || hour === undefined) return err('date and hour required')
   const order = await db.collection('gift_orders').findOne({ id: req.params.id })
   if (!order) return err('Gift order not found', 404)
@@ -89,6 +89,7 @@ router.post('/gift-orders/:id/request-slot', requireUser, asyncRoute(async (req,
   if (order.payment_status !== 'full') return err('Gift order must be paid before booking a slot', 402)
   const setFields = { requested_slot: { date, hour }, delivery_slot: { date, hour } }
   if (typeof gift_message === 'string') setFields.gift_message = gift_message.slice(0, 500)
+  if (delivery_type === 'instant' || delivery_type === 'scheduled') setFields.delivery_type = delivery_type
   await db.collection('gift_orders').updateOne({ id: req.params.id }, { $set: setFields })
   return ok({ success: true })
 }))
