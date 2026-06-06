@@ -83,19 +83,12 @@ router.post('/orders', requireUser, asyncRoute(async (req, res, ok, err) => {
 // GET /orders — requires JWT, only returns own orders
 router.get('/orders', requireUser, asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
-  // Include the user's own unpaid draft so the order stays visible/resumable between
-  // creation and payment. "Real order" lists filter payment_status:'pending' in the UI.
-  const [paid, drafts] = await Promise.all([
-    db.collection('orders').find({ user_id: req.userId }).sort({ created_at: -1 }).limit(50).toArray(),
-    db.collection('draft_orders').find({ user_id: req.userId }).sort({ created_at: -1 }).limit(20).toArray(),
-  ])
-  // Prefer the paid copy if a draft + paid order briefly coexist for the same id (mid-promotion).
-  const seen = new Set()
-  const all = [...paid, ...drafts]
-    .filter(o => (seen.has(o.id) ? false : seen.add(o.id)))
-    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-    .slice(0, 50)
-  return ok(all.map(({ _id, ...o }) => o))
+  // Only paid orders. Unpaid drafts live in draft_orders (and legacy unpaid rows may still
+  // sit in `orders`); neither should clutter the customer's "My Orders" list.
+  const orders = await db.collection('orders')
+    .find({ user_id: req.userId, payment_status: { $ne: 'pending' } })
+    .sort({ created_at: -1 }).limit(50).toArray()
+  return ok(orders.map(({ _id, ...o }) => o))
 }))
 
 // GET /orders/:id — requires JWT, only returns own order

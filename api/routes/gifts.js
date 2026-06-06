@@ -49,7 +49,10 @@ router.post('/gift-orders', requireUser, asyncRoute(async (req, res, ok, err) =>
 // GET /gift-orders — requires JWT, only own orders
 router.get('/gift-orders', requireUser, asyncRoute(async (req, res, ok) => {
   const db     = await connectToMongo()
-  const orders = await db.collection('gift_orders').find({ user_id: req.userId }).sort({ created_at: -1 }).limit(50).toArray()
+  // Only paid gift orders — hide unpaid/abandoned drafts from the customer's gift list.
+  const orders = await db.collection('gift_orders')
+    .find({ user_id: req.userId, payment_status: { $ne: 'pending' } })
+    .sort({ created_at: -1 }).limit(50).toArray()
   return ok(orders.map(({ _id, ...o }) => o))
 }))
 
