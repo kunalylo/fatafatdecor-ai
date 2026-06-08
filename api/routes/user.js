@@ -36,7 +36,7 @@ router.get('/credits/:userId', requireUser, asyncRoute(async (req, res, ok, err)
 // PUT /user/profile — update own name/phone
 router.put('/user/profile', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
-  const { name, phone } = req.body
+  const { name, phone, photo_url } = req.body
   const update = {}
   if (name && typeof name === 'string' && name.trim().length >= 2) update.name = name.trim()
   if (phone) {
@@ -44,6 +44,8 @@ router.put('/user/profile', requireUser, asyncRoute(async (req, res, ok, err) =>
     if (clean.length === 10) update.phone = clean
     else return err('Phone must be 10 digits', 400)
   }
+  // Profile photo: accept a data URL or hosted URL (compressed client-side, capped ~700KB)
+  if (typeof photo_url === 'string' && photo_url.length > 0 && photo_url.length < 700000) update.photo_url = photo_url
   if (Object.keys(update).length === 0) return err('Nothing to update', 400)
   update.updated_at = new Date()
   await db.collection('users').updateOne({ id: req.userId }, { $set: update })
