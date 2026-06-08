@@ -1,10 +1,27 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
+import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
 import { requireUser, requireDp } from '../jwt.js'
-import { asyncRoute } from '../helpers.js'
+import { asyncRoute, sendOtpSms, sendVerificationOtpEmail } from '../helpers.js'
 
 const router = Router()
+
+// Generate a 6-digit OTP on a gift order + notify the recipient/buyer by SMS + email.
+// Shared by the en_route auto-trigger and the manual "resend" endpoint.
+async function issueGiftOtp(db, giftOrder) {
+  const otp = String(Math.floor(100000 + Math.random() * 900000))
+  await db.collection('gift_orders').updateOne(
+    { id: giftOrder.id },
+    { $set: { verification_otp: otp, otp_generated_at: new Date() },
+      $unset: { otp_attempts: '', otp_first_attempt_at: '' } },
+  )
+  const customer = await db.collection('users').findOne({ id: giftOrder.user_id })
+  const phone = giftOrder.recipient_phone || customer?.phone
+  if (phone) { try { sendOtpSms(phone, otp) } catch {} }
+  if (customer?.email) { try { sendVerificationOtpEmail(customer.name, customer.email, otp, giftOrder.id) } catch {} }
+  return otp
+}
 
 // POST /gift-orders — requires JWT (with stock validation)
 router.post('/gift-orders', requireUser, asyncRoute(async (req, res, ok, err) => {
@@ -130,18 +147,73 @@ router.post('/dp/decline-gift-order', requireDp, asyncRoute(async (req, res, ok,
 }))
 
 // POST /dp/update-gift-status
+// NOTE: 'delivered' is NOT settable here — gift delivery must be confirmed with the
+// recipient's OTP via POST /dp/verify-gift-otp. Moving to 'en_route' auto-issues that
+// OTP (SMS + email) so the recipient has it ready when the decorator arrives.
 router.post('/dp/update-gift-status', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db   = await connectToMongo()
   const dpId = req.dpId
   const { order_id, status } = req.body
   if (!order_id || !status) return err('order_id and status required')
-  const VALID = ['assigned','en_route','arrived','delivered']
-  if (!VALID.includes(status)) return err('Invalid status. Must be one of: assigned, en_route, arrived, delivered', 400)
+  if (status === 'delivered') return err('Delivery must be confirmed with the recipient OTP', 400)
+  const VALID = ['assigned','en_route','arrived']
+  if (!VALID.includes(status)) return err('Invalid status. Must be one of: assigned, en_route, arrived', 400)
   const giftOrder = await db.collection('gift_orders').findOne({ id: order_id })
   if (!giftOrder) return err('Gift order not found', 404)
   const isAssigned = (giftOrder.accepted_decorators || []).includes(dpId) || giftOrder.delivery_person_id === dpId
   if (!isAssigned) return err('Not authorized to update this gift order', 403)
   await db.collection('gift_orders').updateOne({ id: order_id }, { $set: { delivery_status: status } })
+  // Send the confirmation OTP to the recipient as soon as the decorator sets out.
+  if (status === 'en_route' && !giftOrder.verification_otp) {
+    try { await issueGiftOtp(db, giftOrder) } catch {}
+  }
+  return ok({ success: true })
+}))
+
+// POST /dp/generate-gift-otp — (re)send the recipient OTP for a gift delivery
+router.post('/dp/generate-gift-otp', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db   = await connectToMongo()
+  const dpId = req.dpId
+  const { order_id } = req.body
+  if (!order_id) return err('order_id required')
+  const giftOrder = await db.collection('gift_orders').findOne({ id: order_id })
+  if (!giftOrder) return err('Gift order not found', 404)
+  const isAssigned = (giftOrder.accepted_decorators || []).includes(dpId) || giftOrder.delivery_person_id === dpId
+  if (!isAssigned) return err('Not authorized for this gift order', 403)
+  await issueGiftOtp(db, giftOrder)
+  return ok({ success: true, order_id })
+}))
+
+// POST /dp/verify-gift-otp — confirm hand-over with the recipient's OTP → delivered
+router.post('/dp/verify-gift-otp', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db   = await connectToMongo()
+  const dpId = req.dpId
+  const { order_id, otp } = req.body
+  if (!order_id || !otp) return err('order_id and otp required')
+  const giftOrder = await db.collection('gift_orders').findOne({ id: order_id })
+  if (!giftOrder) return err('Gift order not found', 404)
+  const isAssigned = (giftOrder.accepted_decorators || []).includes(dpId) || giftOrder.delivery_person_id === dpId
+  if (!isAssigned) return err('Not authorized for this gift order', 403)
+  if (!giftOrder.verification_otp) return err('OTP not generated yet. Tap resend, then ask the recipient.', 400)
+  // Rate limit: max 5 wrong attempts within 10 minutes per order
+  const attempts  = giftOrder.otp_attempts || 0
+  const firstTry  = giftOrder.otp_first_attempt_at ? new Date(giftOrder.otp_first_attempt_at).getTime() : 0
+  const withinTen = firstTry && (Date.now() - firstTry) < 10 * 60 * 1000
+  if (attempts >= 5 && withinTen) return err('Too many attempts. Try again in 10 minutes.', 429)
+  const expected = Buffer.from(String(giftOrder.verification_otp))
+  const actual   = Buffer.from(String(otp))
+  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+    await db.collection('gift_orders').updateOne(
+      { id: order_id },
+      { $inc: { otp_attempts: 1 }, $set: { otp_first_attempt_at: giftOrder.otp_first_attempt_at || new Date() } },
+    )
+    return err('Invalid OTP', 401)
+  }
+  await db.collection('gift_orders').updateOne(
+    { id: order_id },
+    { $set: { delivery_status: 'delivered', otp_verified: true, delivered_at: new Date() },
+      $unset: { otp_attempts: '', otp_first_attempt_at: '' } },
+  )
   return ok({ success: true })
 }))
 
