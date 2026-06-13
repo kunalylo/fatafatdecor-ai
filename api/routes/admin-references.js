@@ -329,10 +329,11 @@ async function runReferencePipeline(referenceId) {
         itemsPriceTotal += linePrice
 
         detectedItems.push({
-          raw_detection:    `${qty}x ${det.color || ''} ${det.finish || ''} ${det.type || ''} ${det.size_inches || ''}"`.replace(/\s+/g, ' ').trim(),
+          raw_detection:    `${qty}x ${det.color || ''} ${det.finish || ''} ${det.type || ''}${det.size_inches ? ` ${det.size_inches}"` : ''}`.replace(/\s+/g, ' ').trim(),
           matched_sku_code: match.sku.sku_code,
           matched_sku_id:   match.sku.id,
-          sku_name:         `${match.sku.color} ${match.sku.subcategory} ${match.sku.size_inches}"`.trim(),
+          // Customer-visible name: no underscores, no meaningless 0" size suffix
+          sku_name:         [match.sku.color, String(match.sku.subcategory || '').replace(/_/g, ' '), match.sku.size_inches ? `${match.sku.size_inches}"` : ''].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim(),
           category:         match.sku.category,
           quantity:         qty,
           unit_cost:        match.sku.per_unit_cost || 0,

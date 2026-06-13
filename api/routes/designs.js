@@ -357,10 +357,12 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
   }
 
   // ── Snapshot: freeze items + customer breakdown at generation time ──
+  // Older references stored raw names like "Orange ribbon_bow 0\"" — clean for customers.
+  const prettyItemName = (s) => String(s || '').replace(/_/g, ' ').replace(/\s+0"\s*$/, '').replace(/\s{2,}/g, ' ').trim()
   const snapshotItems = (picked.detected_items || []).map(i => ({
     id:               i.matched_sku_id || uuidv4(),
     matched_sku_code: i.matched_sku_code || null,
-    name:             i.sku_name || i.raw_detection || 'Item',
+    name:             prettyItemName(i.sku_name || i.raw_detection) || 'Item',
     category:         i.category || '',
     quantity:         i.quantity || 1,
     unit_price:       i.unit_price || 0,        // 2x customer-facing price
