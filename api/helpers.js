@@ -414,18 +414,23 @@ export function sameCity(a, b) {
   return normalizeCityName(String(a).trim()).toLowerCase() === normalizeCityName(String(b).trim()).toLowerCase()
 }
 
-// Resolve the city an order belongs to: an explicit order.city if present, otherwise the first
-// allowed-city name that appears in the delivery address (the app only serves allowed cities, so
-// the address reliably contains one of them). Returns null if nothing matches.
-export async function resolveOrderCity(db, order) {
-  if (order?.city) return normalizeCityName(String(order.city).trim())
-  const addr = String(order?.delivery_address || '')
-  if (!addr) return null
+// Find the first allowed-city name that appears in arbitrary text (a delivery address or a
+// reverse-geocoded location). The app only serves allowed cities, so the text reliably contains one.
+export async function matchAllowedCityInText(db, text) {
+  const t = String(text || '')
+  if (!t) return null
   const cities = await db.collection('allowed_cities').find({ active: true }).toArray()
   for (const c of cities) {
-    if (new RegExp('\\b' + escapeRegex(c.name) + '\\b', 'i').test(addr)) return c.name
+    if (new RegExp('\\b' + escapeRegex(c.name) + '\\b', 'i').test(t)) return c.name
   }
   return null
+}
+
+// Resolve the city an order belongs to: an explicit order.city if present, otherwise the first
+// allowed-city name found in the delivery address. Returns null if nothing matches.
+export async function resolveOrderCity(db, order) {
+  if (order?.city) return normalizeCityName(String(order.city).trim())
+  return matchAllowedCityInText(db, order?.delivery_address)
 }
 
 // ── Route wrapper — provides ok/err + global error handler ───

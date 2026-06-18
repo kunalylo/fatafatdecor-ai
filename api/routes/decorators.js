@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
-import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute, isCityAllowed, normalizeCityName } from '../helpers.js'
+import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute, isCityAllowed, normalizeCityName, matchAllowedCityInText } from '../helpers.js'
 import { signToken, requireDp, requireAdmin } from '../jwt.js'
 import { VAPID_PUBLIC_KEY, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } from '../config.js'
 import Razorpay from 'razorpay'
@@ -122,6 +122,27 @@ router.post('/dp/update-city', requireDp, asyncRoute(async (req, res, ok, err) =
   const dp = await db.collection('delivery_persons').findOne({ id: req.dpId })
   const { _id, password: _, ...safe } = dp || {}
   return ok({ success: true, city: normalized, decorator: safe })
+}))
+
+// POST /dp/detect-city — set the decorator's city from their CURRENT GPS location.
+// Client sends { lat, lng, address } where address is the reverse-geocoded place text.
+// We pick the served city that appears in that text (so a decorator physically in Pune can
+// never be matched to a Ranchi order). Also stores the live location. `served` tells the app
+// whether the detected city is one we operate in.
+router.post('/dp/detect-city', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const { lat, lng, address, city } = req.body || {}
+  let resolved = await matchAllowedCityInText(db, address)   // prefer an allowed city found in the geocode text
+  let served = !!resolved
+  if (!resolved && city) {                                    // fall back to the raw detected city name
+    resolved = normalizeCityName(String(city).trim())
+    served = await isCityAllowed(db, resolved)
+  }
+  const set = { city_updated_at: new Date(), city_auto: true }
+  if (resolved) set.city = resolved
+  if (lat != null && lng != null) set.current_location = { lat, lng, updated_at: new Date() }
+  await db.collection('delivery_persons').updateOne({ id: req.dpId }, { $set: set })
+  return ok({ success: true, city: resolved || null, served })
 }))
 
 // GET /dp/dashboard/:id
