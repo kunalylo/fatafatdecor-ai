@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import Razorpay from 'razorpay'
 import { connectToMongo } from '../db.js'
 import { requireUser } from '../jwt.js'
-import { sendWhatsApp, sendOrderBookedEmail, sendPaymentReceiptEmail, asyncRoute } from '../helpers.js'
+import { sendWhatsApp, sendOrderBookedEmail, sendPaymentReceiptEmail, asyncRoute, sameCity, resolveOrderCity } from '../helpers.js'
 import { sendPushToDecorator } from '../push.js'
 import { RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } from '../config.js'
 
@@ -162,15 +162,20 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
       sendPaymentReceiptEmail(payUser.name, payUser.email, payment, paidOrder, 'decoration')
     }
 
-    // NOW assign decorators and notify them — only after confirmed payment
+    // NOW assign decorators and notify them — only after confirmed payment.
+    // City scoping: a decorator only gets orders from their own city. A decorator who has set their
+    // city receives only that city's orders; decorators with no city set still receive everything
+    // (so onboarding isn't blocked). If we can't resolve the order's city, fall back to all active.
     if (paidOrder && (!paidOrder.assigned_decorators || paidOrder.assigned_decorators.length === 0)) {
-      const availablePersons = await db.collection('delivery_persons').find({ is_active: true }).toArray()
+      const orderCity = await resolveOrderCity(db, paidOrder)
+      const allActive = await db.collection('delivery_persons').find({ is_active: true }).toArray()
+      const availablePersons = allActive.filter(p => !p.city || !orderCity || sameCity(p.city, orderCity))
       if (availablePersons.length > 0) {
         const assignedIds  = availablePersons.map(p => p.id)
         const assignedInfo = availablePersons.map(p => ({ id: p.id, name: p.name, phone: p.phone }))
         await db.collection('orders').updateOne(
           { id: payment.order_id },
-          { $set: { assigned_decorators: assignedIds, assigned_decorators_info: assignedInfo, delivery_status: 'pending' } }
+          { $set: { assigned_decorators: assignedIds, assigned_decorators_info: assignedInfo, delivery_status: 'pending', city: orderCity || paidOrder.city || null } }
         )
         for (const dp of availablePersons) {
           if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor NEW ORDER #${payment.order_id.slice(0, 8)}: ${paidOrder.delivery_address || 'Address not set'}. Amount: Rs.${paidOrder.total_cost}. Open your decorator app now to accept! -FatafatDecor`)
@@ -201,15 +206,17 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
       sendPaymentReceiptEmail(giftPayUser.name, giftPayUser.email, payment, giftOrder, 'gift')
     }
 
-    // Assign decorators to gift order now that payment is confirmed
+    // Assign decorators to gift order now that payment is confirmed (city-scoped, same rule as above)
     if (giftOrder && (!giftOrder.assigned_decorators || giftOrder.assigned_decorators.length === 0)) {
-      const activePersons = await db.collection('delivery_persons').find({ is_active: true }).toArray()
+      const giftCity = await resolveOrderCity(db, giftOrder)
+      const allActiveGift = await db.collection('delivery_persons').find({ is_active: true }).toArray()
+      const activePersons = allActiveGift.filter(p => !p.city || !giftCity || sameCity(p.city, giftCity))
       if (activePersons.length > 0) {
         const assignedIds  = activePersons.map(p => p.id)
         const assignedInfo = activePersons.map(p => ({ id: p.id, name: p.name, phone: p.phone }))
         await db.collection('gift_orders').updateOne(
           { id: payment.order_id },
-          { $set: { assigned_decorators: assignedIds, assigned_decorators_info: assignedInfo, delivery_status: 'pending' } }
+          { $set: { assigned_decorators: assignedIds, assigned_decorators_info: assignedInfo, delivery_status: 'pending', city: giftCity || giftOrder.city || null } }
         )
         for (const dp of activePersons) {
           if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor GIFT ORDER #${payment.order_id.slice(0, 8)}: ${giftOrder.delivery_address || 'Address not set'}. Amount: Rs.${giftOrder.gift_total}. Open your decorator app now to accept! -FatafatDecor`)

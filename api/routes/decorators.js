@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
-import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute } from '../helpers.js'
+import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute, isCityAllowed, normalizeCityName } from '../helpers.js'
 import { signToken, requireDp, requireAdmin } from '../jwt.js'
 import { VAPID_PUBLIC_KEY, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } from '../config.js'
 import Razorpay from 'razorpay'
@@ -107,6 +107,23 @@ router.post('/dp/change-password', requireDp, asyncRoute(async (req, res, ok, er
   return ok({ success: true, message: 'Password updated successfully' })
 }))
 
+// POST /dp/update-city — decorator sets the city they currently work in.
+// They only receive orders/notifications from this city. Must be a city we serve.
+router.post('/dp/update-city', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const { city } = req.body
+  if (!city || !String(city).trim()) return err('city required')
+  const normalized = normalizeCityName(String(city).trim())
+  if (!(await isCityAllowed(db, normalized))) return err('We do not serve that city yet. Pick a city from the list.', 400)
+  await db.collection('delivery_persons').updateOne(
+    { id: req.dpId },
+    { $set: { city: normalized, city_updated_at: new Date() } }
+  )
+  const dp = await db.collection('delivery_persons').findOne({ id: req.dpId })
+  const { _id, password: _, ...safe } = dp || {}
+  return ok({ success: true, city: normalized, decorator: safe })
+}))
+
 // GET /dp/dashboard/:id
 router.get('/dp/dashboard/:id', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db    = await connectToMongo()
@@ -115,14 +132,16 @@ router.get('/dp/dashboard/:id', requireDp, asyncRoute(async (req, res, ok, err) 
   const today = new Date().toISOString().split('T')[0]
   const dp    = await db.collection('delivery_persons').findOne({ id: dpId })
   if (!dp) return err('Delivery person not found', 404)
-  const [todayOrders, allActiveOrders, pendingOrders, pendingGiftOrders] = await Promise.all([
+  const [todayOrders, allActiveOrders, pendingOrders, pendingGiftOrders, activeGiftOrders] = await Promise.all([
     db.collection('orders').find({ $or: [{ accepted_decorators: dpId }, { delivery_person_id: dpId }], 'delivery_slot.date': today }).sort({ 'delivery_slot.hour': 1 }).toArray(),
     db.collection('orders').find({ $or: [{ accepted_decorators: dpId }, { delivery_person_id: dpId }], delivery_status: { $in: ['assigned','en_route','arrived','decorating'] } }).toArray(),
     db.collection('orders').find({ assigned_decorators: dpId, accepted_decorators: { $not: { $elemMatch: { $eq: dpId } } }, $expr: { $lt: [{ $size: { $ifNull: ['$accepted_decorators', []] } }, 2] } }).sort({ created_at: -1 }).toArray(),
     db.collection('gift_orders').find({ assigned_decorators: dpId, payment_status: 'full', delivery_status: 'pending' }).sort({ created_at: -1 }).toArray(),
+    // Accepted gift orders still in progress — so the decorator can re-open them to finish the OTP/hand-over.
+    db.collection('gift_orders').find({ $or: [{ accepted_decorators: dpId }, { delivery_person_id: dpId }], delivery_status: { $in: ['assigned','en_route','arrived'] } }).sort({ created_at: -1 }).toArray(),
   ])
   const { _id, password: _, ...safeDp } = dp
-  return ok({ delivery_person: safeDp, today_orders: todayOrders.map(({ _id, ...o }) => o), active_orders: allActiveOrders.map(({ _id, ...o }) => o), pending_orders: pendingOrders.map(({ _id, ...o }) => o), pending_gift_orders: pendingGiftOrders.map(({ _id, ...o }) => o), date: today })
+  return ok({ delivery_person: safeDp, today_orders: todayOrders.map(({ _id, ...o }) => o), active_orders: allActiveOrders.map(({ _id, ...o }) => o), pending_orders: pendingOrders.map(({ _id, ...o }) => o), pending_gift_orders: pendingGiftOrders.map(({ _id, ...o }) => o), active_gift_orders: activeGiftOrders.map(({ _id, ...o }) => o), date: today })
 }))
 
 // GET /dp/calendar/:id

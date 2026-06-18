@@ -408,6 +408,26 @@ export async function isCityAllowed(db, city) {
   return !!doc
 }
 
+// True when two city names refer to the same city (alias + case + trim aware).
+export function sameCity(a, b) {
+  if (!a || !b) return false
+  return normalizeCityName(String(a).trim()).toLowerCase() === normalizeCityName(String(b).trim()).toLowerCase()
+}
+
+// Resolve the city an order belongs to: an explicit order.city if present, otherwise the first
+// allowed-city name that appears in the delivery address (the app only serves allowed cities, so
+// the address reliably contains one of them). Returns null if nothing matches.
+export async function resolveOrderCity(db, order) {
+  if (order?.city) return normalizeCityName(String(order.city).trim())
+  const addr = String(order?.delivery_address || '')
+  if (!addr) return null
+  const cities = await db.collection('allowed_cities').find({ active: true }).toArray()
+  for (const c of cities) {
+    if (new RegExp('\\b' + escapeRegex(c.name) + '\\b', 'i').test(addr)) return c.name
+  }
+  return null
+}
+
 // ── Route wrapper — provides ok/err + global error handler ───
 export function asyncRoute(fn) {
   return async (req, res) => {

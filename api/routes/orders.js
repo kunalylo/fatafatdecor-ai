@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { connectToMongo } from '../db.js'
 import { requireUser } from '../jwt.js'
-import { sendWhatsApp, asyncRoute } from '../helpers.js'
+import { sendWhatsApp, asyncRoute, sameCity, resolveOrderCity } from '../helpers.js'
 import { sendPushToDecorator } from '../push.js'
 
 const router = Router()
@@ -127,7 +127,10 @@ router.post('/orders/auto-reassign', requireUser, asyncRoute(async (req, res, ok
   if (order.delivery_person_id) return ok({ reassigned: false, reason: 'decorator already assigned' })
   const ageMs = Date.now() - new Date(order.created_at).getTime()
   if (ageMs < 30 * 60 * 1000) return ok({ reassigned: false, reason: 'not timed out yet' })
-  const availablePersons = await db.collection('delivery_persons').find({ is_active: true }).toArray()
+  // City-scoped reassignment — same rule as the initial assignment in payments.js
+  const orderCity        = await resolveOrderCity(db, order)
+  const allActive        = await db.collection('delivery_persons').find({ is_active: true }).toArray()
+  const availablePersons = allActive.filter(p => !p.city || !orderCity || sameCity(p.city, orderCity))
   const currentIds       = order.assigned_decorators || []
   const fresh            = availablePersons.filter(p => !currentIds.includes(p.id)).slice(0, 2)
   const reassignedIds    = [...currentIds, ...fresh.map(p => p.id)]
