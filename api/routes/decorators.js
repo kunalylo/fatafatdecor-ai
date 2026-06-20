@@ -74,7 +74,9 @@ router.post('/dp/login', asyncRoute(async (req, res, ok, err) => {
     $or: [{ phone }, { phone: cleanPhone }]
   })
   if (!dp) return err('Delivery person not found', 404)
-  if (dp.password && password && dp.password !== hashPwd(password)) return err('Invalid password', 401)
+  // If the decorator has a password set, it MUST be provided and match. (Previously an empty
+  // password skipped the check entirely — anyone knowing the phone could log in.)
+  if (dp.password && (!password || dp.password !== hashPwd(password))) return err('Invalid password', 401)
   if (dp.is_active === false) return err('Account is inactive. Contact support.', 403)
   const token = await signToken({ dp_id: dp.id, role: 'decorator' })
   const { _id, password: _, ...safe } = dp
