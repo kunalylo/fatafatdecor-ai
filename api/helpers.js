@@ -433,6 +433,81 @@ export async function resolveOrderCity(db, order) {
   return matchAllowedCityInText(db, order?.delivery_address)
 }
 
+// ── Decorator scheduling / double-booking ─────────────────────────
+// A decorator can only physically be at one job at a time. Each accepted job occupies a block:
+//   30 min BEFORE the slot (warehouse pickup + travel) + the decoration window + 30 min AFTER
+//   (return to warehouse, hand back items, deposit cash). Gift deliveries are quicker (1h window).
+// So a 1pm decoration (2h) blocks 12:30pm → 3:30pm. A new job can't be accepted if its block
+// overlaps any block the decorator is already committed to.
+export const SCHEDULE = {
+  bufferMin: 30,
+  durationHours: { decoration: 2, gift: 1 },
+}
+
+// Slot { date:'YYYY-MM-DD', hour:Number } → epoch ms (UTC). Timezone is irrelevant because both
+// sides of an overlap comparison use the same conversion, so the offset cancels out.
+export function slotToMs(slot) {
+  if (!slot || slot.hour === undefined || slot.hour === null || !slot.date) return null
+  const hh = String(slot.hour).padStart(2, '0')
+  const ms = Date.parse(`${slot.date}T${hh}:00:00Z`)
+  return Number.isFinite(ms) ? ms : null
+}
+
+// [start, end] busy block in ms for a job, including the before/after buffers.
+export function jobBlock(slot, kind) {
+  const start = slotToMs(slot)
+  if (start === null) return null
+  const durMs = (SCHEDULE.durationHours[kind] ?? 2) * 3600000
+  const bufMs = SCHEDULE.bufferMin * 60000
+  return [start - bufMs, start + durMs + bufMs]
+}
+
+export function blocksOverlap(a, b) {
+  return !!a && !!b && a[0] < b[1] && b[0] < a[1]
+}
+
+// All the decorator's still-active committed jobs (accepted or lead, not delivered/cancelled),
+// across decoration orders + gift orders, normalized to { order, slot, kind }.
+export async function decoratorCommitments(db, dpId) {
+  const filter = {
+    $or: [{ accepted_decorators: dpId }, { delivery_person_id: dpId }],
+    delivery_status: { $nin: ['delivered', 'cancelled'] },
+  }
+  const [deco, gift] = await Promise.all([
+    db.collection('orders').find(filter).toArray(),
+    db.collection('gift_orders').find(filter).toArray(),
+  ])
+  return [
+    ...deco.map(o => ({ order: o, slot: o.delivery_slot, kind: 'decoration' })),
+    ...gift.map(o => ({ order: o, slot: o.delivery_slot, kind: 'gift' })),
+  ]
+}
+
+// First commitment whose block overlaps the new job's block, or null. Excludes excludeId.
+export function scheduleConflictAgainst(commitments, newSlot, newKind, excludeId) {
+  const nb = jobBlock(newSlot, newKind)
+  if (!nb) return null
+  for (const c of commitments) {
+    if (excludeId && c.order?.id === excludeId) continue
+    if (blocksOverlap(nb, jobBlock(c.slot, c.kind))) return c
+  }
+  return null
+}
+
+// Friendly "you're already booked" message for a clash returned by scheduleConflictAgainst.
+export function scheduleClashMessage(clash) {
+  const s = clash?.slot
+  const when = s ? `${s.date} at ${s.hour}:00` : 'another job'
+  return `This clashes with your ${clash?.kind === 'gift' ? 'gift delivery' : 'decoration job'} on ${when}. ` +
+         `Keep a clear gap (30 min travel + 2 h on site + 30 min to return) between jobs.`
+}
+
+// Slim conflict descriptor for the dashboard so the app can disable/annotate a pending card.
+export function conflictDescriptor(clash) {
+  if (!clash) return null
+  return { kind: clash.kind, date: clash.slot?.date || null, hour: clash.slot?.hour ?? null }
+}
+
 // ── Route wrapper — provides ok/err + global error handler ───
 export function asyncRoute(fn) {
   return async (req, res) => {

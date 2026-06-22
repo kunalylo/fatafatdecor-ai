@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
-import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute, isCityAllowed, normalizeCityName, matchAllowedCityInText } from '../helpers.js'
+import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute, isCityAllowed, normalizeCityName, matchAllowedCityInText, decoratorCommitments, scheduleConflictAgainst, scheduleClashMessage, conflictDescriptor } from '../helpers.js'
 import { signToken, requireDp, requireAdmin } from '../jwt.js'
 import { VAPID_PUBLIC_KEY, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } from '../config.js'
 import Razorpay from 'razorpay'
@@ -164,7 +164,11 @@ router.get('/dp/dashboard/:id', requireDp, asyncRoute(async (req, res, ok, err) 
     db.collection('gift_orders').find({ $or: [{ accepted_decorators: dpId }, { delivery_person_id: dpId }], delivery_status: { $in: ['assigned','en_route','arrived'] } }).sort({ created_at: -1 }).toArray(),
   ])
   const { _id, password: _, ...safeDp } = dp
-  return ok({ delivery_person: safeDp, today_orders: todayOrders.map(({ _id, ...o }) => o), active_orders: allActiveOrders.map(({ _id, ...o }) => o), pending_orders: pendingOrders.map(({ _id, ...o }) => o), pending_gift_orders: pendingGiftOrders.map(({ _id, ...o }) => o), active_gift_orders: activeGiftOrders.map(({ _id, ...o }) => o), date: today })
+  // Flag pending orders that clash with what this decorator has already accepted, so the app can
+  // disable Accept and explain why (double-booking: each job needs a 30m+2h+30m clear block).
+  const commitments = await decoratorCommitments(db, dpId)
+  const withConflict = (o, kind) => ({ ...o, schedule_conflict: conflictDescriptor(scheduleConflictAgainst(commitments, o.delivery_slot, kind, o.id)) })
+  return ok({ delivery_person: safeDp, today_orders: todayOrders.map(({ _id, ...o }) => o), active_orders: allActiveOrders.map(({ _id, ...o }) => o), pending_orders: pendingOrders.map(({ _id, ...o }) => withConflict(o, 'decoration')), pending_gift_orders: pendingGiftOrders.map(({ _id, ...o }) => withConflict(o, 'gift')), active_gift_orders: activeGiftOrders.map(({ _id, ...o }) => o), date: today })
 }))
 
 // GET /dp/calendar/:id
@@ -569,6 +573,11 @@ router.post('/dp/accept-order', requireDp, asyncRoute(async (req, res, ok, err) 
   if (!order) return err('Order not found', 404)
   if (!(order.assigned_decorators || []).includes(dpId)) return err('Order not assigned to you', 403)
   if ((order.accepted_decorators || []).includes(dpId)) return err('You have already accepted this order')
+  // Double-booking guard: this job's 3-hour block (30 min travel + 2 h decorate + 30 min return)
+  // must not overlap any job the decorator has already committed to.
+  const commitments = await decoratorCommitments(db, dpId)
+  const clash = scheduleConflictAgainst(commitments, order.delivery_slot, 'decoration', order_id)
+  if (clash) return err(scheduleClashMessage(clash), 409)
   const update = { $addToSet: { accepted_decorators: dpId } }
   if (!order.delivery_person_id) update.$set = { delivery_person_id: dpId, delivery_status: 'assigned' }
   await db.collection('orders').updateOne({ id: order_id }, update)
