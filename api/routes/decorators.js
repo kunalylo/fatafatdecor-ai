@@ -229,6 +229,9 @@ router.post('/dp/selfie-proof', requireDp, asyncRoute(async (req, res, ok, err) 
   if (!dp) return err('Decorator not found', 404)
   const order = await assertDpOwnsOrder(db, order_id, dpId, res)
   if (!order) return
+  // Check-in only makes sense once the decorator is on the way (en_route) — Start Navigation is
+  // also where the customer OTP is issued, so block skipping straight to "arrived".
+  if (!['en_route', 'arrived'].includes(order.delivery_status)) return err('Start navigation before checking in', 400)
   await db.collection('orders').updateOne(
     { id: order_id },
     { $set: {
@@ -412,11 +415,13 @@ router.post('/dp/collect-payment', requireDp, asyncRoute(async (req, res, ok, er
   if (!Number.isFinite(amt) || amt <= 0) return err('Invalid amount', 400)
   const order = await assertDpOwnsOrder(db, order_id, dpId, res)
   if (!order) return
+  // Guard against double-collection (the online path already does this).
+  if (order.payment_status === 'full') return err('This order is already fully paid', 400)
   const collection = { id: uuidv4(), order_id, dp_id: dpId, amount: amt, method: payMethod || 'cash', notes: notes || '', deposited: false, created_at: new Date() }
   await db.collection('dp_collections').insertOne(collection)
   await db.collection('orders').updateOne(
     { id: order_id },
-    { $set: { payment_status: 'full', remaining_collected: true, collection_method: payMethod || 'cash' } }
+    { $set: { payment_status: 'full', remaining_collected: true, collection_method: payMethod || 'cash' }, $inc: { payment_amount: amt } }
   )
   const { _id, ...clean } = collection
   return ok(clean)
@@ -463,7 +468,7 @@ router.post('/dp/collect-payment/verify-online', requireDp, asyncRoute(async (re
     await db.collection('dp_collections').insertOne({ id: uuidv4(), order_id: payment.order_id, dp_id: dpId, amount: payment.amount, method: 'online', deposited: true, razorpay_payment_id, created_at: new Date() })
     await db.collection('orders').updateOne(
       { id: payment.order_id },
-      { $set: { payment_status: 'full', remaining_collected: true, collection_method: 'online', payment_amount: (order.payment_amount || 0) + payment.amount } }
+      { $set: { payment_status: 'full', remaining_collected: true, collection_method: 'online' }, $inc: { payment_amount: payment.amount } }
     )
   }
   return ok({ success: true })
@@ -508,15 +513,20 @@ router.post('/dp/update-status', requireDp, asyncRoute(async (req, res, ok, err)
   const dpId = req.dpId
   const { order_id, status, notes } = req.body
   if (!order_id || !status) return err('order_id and status required')
-  const VALID = ['pending','assigned','en_route','arrived','decorating','delivered','cancelled']
+  // 'decorating' and 'delivered' are NOT settable here — they require the customer OTP
+  // (dp/verify-otp) and completion (dp/complete) flows. Blocking them here stops the OTP
+  // check-in from being bypassed via a plain status update.
+  if (status === 'decorating') return err('Verify the customer OTP to start decorating', 400)
+  if (status === 'delivered')  return err('Use Complete to finish the job', 400)
+  const VALID = ['pending','assigned','en_route','arrived','cancelled']
   if (!VALID.includes(status)) return err('Invalid status', 400)
   const order = await assertDpOwnsOrder(db, order_id, dpId, res)
   if (!order) return
   // Enforce valid status transitions
   const TRANSITIONS = {
     pending: ['assigned','cancelled'], assigned: ['en_route','cancelled'],
-    en_route: ['arrived','cancelled'], arrived: ['decorating','cancelled'],
-    decorating: ['delivered'], delivered: [], cancelled: [],
+    en_route: ['arrived','cancelled'], arrived: ['cancelled'],
+    decorating: [], delivered: [], cancelled: [],
   }
   const allowed = TRANSITIONS[order.delivery_status || 'pending'] || []
   if (!allowed.includes(status)) return err(`Cannot move from "${order.delivery_status || 'pending'}" to "${status}"`, 400)
@@ -573,14 +583,24 @@ router.post('/dp/accept-order', requireDp, asyncRoute(async (req, res, ok, err) 
   if (!order) return err('Order not found', 404)
   if (!(order.assigned_decorators || []).includes(dpId)) return err('Order not assigned to you', 403)
   if ((order.accepted_decorators || []).includes(dpId)) return err('You have already accepted this order')
+  if ((order.accepted_decorators || []).length >= 2) return err('This order already has 2 decorators assigned', 409)
   // Double-booking guard: this job's 3-hour block (30 min travel + 2 h decorate + 30 min return)
   // must not overlap any job the decorator has already committed to.
   const commitments = await decoratorCommitments(db, dpId)
   const clash = scheduleConflictAgainst(commitments, order.delivery_slot, 'decoration', order_id)
   if (clash) return err(scheduleClashMessage(clash), 409)
-  const update = { $addToSet: { accepted_decorators: dpId } }
-  if (!order.delivery_person_id) update.$set = { delivery_person_id: dpId, delivery_status: 'assigned' }
-  await db.collection('orders').updateOne({ id: order_id }, update)
+  // Atomic accept — the filter only matches while fewer than 2 have accepted, so two decorators
+  // accepting at the same instant can never push past the cap (the read above can be stale).
+  const r = await db.collection('orders').updateOne(
+    { id: order_id, $expr: { $lt: [{ $size: { $ifNull: ['$accepted_decorators', []] } }, 2] } },
+    { $addToSet: { accepted_decorators: dpId } }
+  )
+  if (r.matchedCount === 0) return err('This order already has 2 decorators assigned', 409)
+  // First accepter becomes the lead decorator (for live tracking) — set only if still unset.
+  await db.collection('orders').updateOne(
+    { id: order_id, $or: [{ delivery_person_id: null }, { delivery_person_id: { $exists: false } }] },
+    { $set: { delivery_person_id: dpId, delivery_status: 'assigned' } }
+  )
   return ok({ success: true, message: 'Order accepted successfully' })
 }))
 

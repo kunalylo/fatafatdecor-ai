@@ -75,7 +75,10 @@ router.post('/delivery/status', requireDp, asyncRoute(async (req, res, ok, err) 
   const dpId = req.dpId
   const { order_id, status } = req.body
   if (!order_id || !status) return err('order_id and status required')
-  const VALID = ['pending','assigned','en_route','arrived','decorating','delivered','cancelled']
+  // 'decorating' / 'delivered' must go through the OTP (dp/verify-otp) + completion (dp/complete)
+  // flows — never a bare status write, which would skip the customer's verification.
+  if (status === 'decorating' || status === 'delivered') return err('Use the OTP / Complete flow for this status', 400)
+  const VALID = ['pending','assigned','en_route','arrived','cancelled']
   if (!VALID.includes(status)) return err('Invalid status', 400)
   const order = await db.collection('orders').findOne({ id: order_id })
   if (!order) return err('Order not found', 404)
