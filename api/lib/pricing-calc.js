@@ -1,11 +1,11 @@
 // Pricing model — single source of truth (backend).
 //
 // base_price = total selling value of decoration & material (2x markup of cost).
-// On top of that, customer pays:
+// GST 18% applies ONLY to Decoration & Material (base_price).
+// The service fees are added AFTER tax (untaxed):
 //   • Setup + transportation (tiered by base_price)
 //   • Platform fee (flat)
 //   • Convenience fee (flat)
-//   • GST 18% on the subtotal
 //
 // Operating margin (admin only) = base_price - sum(items_cost_1x).
 // The setup/platform/convenience fees are charged to cover delivery ops
@@ -31,26 +31,29 @@ export function setupTransportFee(basePrice) {
 /**
  * Compute the full customer-facing breakdown.
  *
+ * GST applies ONLY to Decoration & Material. Service fees are added
+ * after tax (untaxed).
+ *
  * Returns:
  *   {
  *     decoration_total: 7200,   // base_price (items @ 2x)
- *     setup_transport: 625,
- *     platform_fee:    99,
- *     convenience_fee: 27,
- *     fees_subtotal:   751,     // setup + platform + convenience
- *     subtotal:        7951,    // decoration + fees_subtotal
- *     gst:             1431,
- *     gst_rate:        0.18,
- *     total:           9382,
+ *     gst:              1296,   // 18% of decoration only
+ *     gst_rate:         0.18,
+ *     subtotal:         8496,   // decoration + gst
+ *     setup_transport:  625,
+ *     platform_fee:     99,
+ *     convenience_fee:  27,
+ *     fees_subtotal:    751,    // setup + platform + convenience (untaxed)
+ *     total:            9247,   // subtotal + fees_subtotal
  *   }
  */
 export function customerBreakdown(basePrice) {
   const decoration = Math.round(Number(basePrice) || 0)
   const setupTransport = setupTransportFee(decoration)
   const feesSubtotal = setupTransport + PLATFORM_FEE + CONVENIENCE_FEE
-  const subtotal     = decoration + feesSubtotal
-  const gst          = Math.round(subtotal * GST_RATE)
-  const total        = subtotal + gst
+  const gst          = Math.round(decoration * GST_RATE)   // GST on decoration ONLY
+  const subtotal     = decoration + gst                    // decoration incl. GST
+  const total        = subtotal + feesSubtotal             // fees added after tax
   return {
     decoration_total: decoration,
     setup_transport:  setupTransport,
