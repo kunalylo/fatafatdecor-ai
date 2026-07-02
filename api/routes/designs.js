@@ -84,7 +84,9 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
 
   try {
     const controller = new AbortController()
-    const aiTimeout  = setTimeout(() => controller.abort(), 90000)
+    // High-fidelity gpt-image-1 (input_fidelity=high + quality=high + non-square sizes)
+    // takes longer than the old fast path — allow up to 150s before refunding the credit.
+    const aiTimeout  = setTimeout(() => controller.abort(), 150000)
     const aiRes = await fetch(`${AI_SERVICE_URL}/smart-generate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -321,7 +323,7 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
   // ── Style transfer via FastAPI multi-image gpt-image-1 ──────────────
   try {
     const controller = new AbortController()
-    const timeout    = setTimeout(() => controller.abort(), 120000)
+    const timeout    = setTimeout(() => controller.abort(), 150000)
     const styleRes = await fetch(`${AI_SERVICE_URL}/style-transfer-from-reference`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },

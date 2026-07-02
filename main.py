@@ -139,10 +139,38 @@ def _compress_image(image_base64: str, max_px: int = 1024, quality: int = 88) ->
     return buf.getvalue()
 
 
+def _best_output_size(image_bytes: bytes) -> str:
+    """
+    Match the output canvas to the room photo's orientation so gpt-image-1
+    does not crop/recompose the room into a square. Supported sizes:
+    1024x1024 (square), 1024x1536 (portrait), 1536x1024 (landscape).
+    """
+    from PIL import Image
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        w, h = img.size
+        ratio = w / h
+        if ratio <= 0.85:
+            return "1024x1536"   # portrait (phone photos)
+        if ratio >= 1.18:
+            return "1536x1024"   # landscape
+        return "1024x1024"
+    except Exception:
+        return "1024x1024"
+
+
 async def run_gpt_image_edit(prompt: str, image_bytes: bytes) -> str:
     """
     gpt-image-1 — edits room photo to add decorations (single image mode).
     image_bytes: already compressed JPEG bytes (not base64).
+
+    Fidelity settings (the difference between "a decorated room" and
+    "THE CUSTOMER'S room decorated"):
+      • input_fidelity=high — preserves the input photo's walls, furniture,
+        faces and layout instead of re-imagining the room.
+      • size matched to the photo's orientation — no square recomposition
+        of portrait phone photos.
+      • quality=high — best texture/detail rendering.
     Returns base64 data URL of the decorated image.
     """
     from openai import OpenAI
@@ -154,7 +182,11 @@ async def run_gpt_image_edit(prompt: str, image_bytes: bytes) -> str:
         image=("room.jpg", image_bytes, "image/jpeg"),
         prompt=prompt,
         n=1,
-        size="1024x1024",
+        size=_best_output_size(image_bytes),
+        quality="high",
+        # extra_body is version-proof: works even if the installed SDK
+        # predates the named input_fidelity kwarg.
+        extra_body={"input_fidelity": "high"},
     )
     b64 = response.data[0].b64_json
     return f"data:image/png;base64,{b64}"
@@ -183,7 +215,9 @@ async def run_gpt_image_edit_with_reference(
         ],
         prompt=prompt,
         n=1,
-        size="1024x1024",
+        size=_best_output_size(room_bytes),
+        quality="high",
+        extra_body={"input_fidelity": "high"},
     )
     b64 = response.data[0].b64_json
     return f"data:image/png;base64,{b64}"
@@ -340,16 +374,24 @@ def _build_decoration_prompt(
 
     if has_image:
         return (
-            f"A professional event decorator has fully decorated this {room_type} for a {occasion} celebration.\n\n"
-            f"The decorator has placed ALL {item_count} of these items inside the room — every single one must be clearly visible:\n"
+            f"A professional event decorator has fully decorated this exact {room_type} for a {occasion} celebration.\n\n"
+            f"THIS IS THE CUSTOMER'S REAL ROOM — it must remain unmistakably the SAME room:\n"
+            f"• Walls, floor, ceiling, doors, windows: identical colour, texture, trim and materials.\n"
+            f"• Every piece of existing furniture and every object stays exactly where it is — "
+            f"same position, orientation, scale and condition.\n"
+            f"• Existing fixtures (lights, fans, switches, frames, appliances) are untouched.\n"
+            f"• Camera angle, perspective, framing and proportions are IDENTICAL to the photo — "
+            f"do not rotate, crop, zoom, or re-render the room from a different viewpoint.\n"
+            f"• Any people or pets in the photo keep their exact faces, poses and clothing.\n\n"
+            f"The decorator has ADDED all {item_count} of these items on top of the existing room — "
+            f"every single one must be clearly visible:\n"
             f"{bullet_list}\n\n"
             f"CRITICAL: Each and every item listed above MUST appear in the image. "
-            f"Do not skip or omit any item. All {item_count} decorations are present and clearly visible. "
-            f"Every item is placed realistically with professional density and arrangement — "
-            f"exactly as a real decorator would set it up. "
-            f"The room's original furniture, walls, floor, and ceiling structure are completely unchanged — "
-            f"only the listed decorations have been added on top. "
-            f"The result looks like a genuine photograph of a professionally decorated venue.{special}\n\n"
+            f"Do not skip or omit any item. All {item_count} decorations are present and clearly visible, "
+            f"placed realistically with professional density and arrangement — "
+            f"exactly as a real decorator would set them up in this specific room. "
+            f"The result looks like a genuine photograph taken in the customer's own room "
+            f"after the decorator finished.{special}\n\n"
             f"{NO_TEXT}"
         )
     else:
