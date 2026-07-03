@@ -136,10 +136,11 @@ router.post('/orders/auto-reassign', requireUser, asyncRoute(async (req, res, ok
   const reassignedIds    = [...currentIds, ...fresh.map(p => p.id)]
   const reassignedInfo   = [...(order.assigned_decorators_info || []), ...fresh.map(p => ({ id: p.id, name: p.name, phone: p.phone }))]
   await db.collection('orders').updateOne({ id: order_id }, { $set: { assigned_decorators: reassignedIds, assigned_decorators_info: reassignedInfo, last_reassigned_at: new Date() } })
+  const reassignCollect = Math.max(0, Math.round((order.total_cost || 0) - (order.payment_amount || 0)))
   for (const dp of fresh) {
     sendPushToDecorator(db, dp.id, {
       title: '🎉 New order available!',
-      body: `A booking is waiting · Rs.${order.total_cost}. Tap to accept.`,
+      body: `A booking is waiting · Collect Rs.${reassignCollect}. Tap to accept.`,
       tag: `fd-order-${order_id.slice(0, 8)}`,
       url: '/',
     }).catch(() => {})

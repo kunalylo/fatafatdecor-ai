@@ -177,11 +177,13 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
           { id: payment.order_id },
           { $set: { assigned_decorators: assignedIds, assigned_decorators_info: assignedInfo, delivery_status: 'pending', city: orderCity || paidOrder.city || null } }
         )
+        // Decorators only see what they must collect, never the order total.
+        const dpCollect = Math.max(0, Math.round((paidOrder.total_cost || 0) - (paidOrder.payment_amount || 0)))
         for (const dp of availablePersons) {
-          if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor NEW ORDER #${payment.order_id.slice(0, 8)}: ${paidOrder.delivery_address || 'Address not set'}. Amount: Rs.${paidOrder.total_cost}. Open your decorator app now to accept! -FatafatDecor`)
+          if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor NEW ORDER #${payment.order_id.slice(0, 8)}: ${paidOrder.delivery_address || 'Address not set'}. Collect on delivery: Rs.${dpCollect}. Open your decorator app now to accept! -FatafatDecor`)
           sendPushToDecorator(db, dp.id, {
             title: '🎉 New order available!',
-            body: `New booking · Rs.${paidOrder.total_cost} · ${(paidOrder.delivery_address || 'Tap to view').slice(0, 60)}. Accept before another decorator does.`,
+            body: `New booking · Collect Rs.${dpCollect} · ${(paidOrder.delivery_address || 'Tap to view').slice(0, 60)}. Accept before another decorator does.`,
             tag: `fd-order-${payment.order_id.slice(0, 8)}`,
             url: '/',
           }).catch(() => {})
@@ -219,10 +221,10 @@ router.post('/payments/verify', requireUser, asyncRoute(async (req, res, ok, err
           { $set: { assigned_decorators: assignedIds, assigned_decorators_info: assignedInfo, delivery_status: 'pending', city: giftCity || giftOrder.city || null } }
         )
         for (const dp of activePersons) {
-          if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor GIFT ORDER #${payment.order_id.slice(0, 8)}: ${giftOrder.delivery_address || 'Address not set'}. Amount: Rs.${giftOrder.gift_total}. Open your decorator app now to accept! -FatafatDecor`)
+          if (dp.phone) await sendWhatsApp(dp.phone, `FatafatDecor GIFT ORDER #${payment.order_id.slice(0, 8)}: ${giftOrder.delivery_address || 'Address not set'}. Prepaid — nothing to collect. Open your decorator app now to accept! -FatafatDecor`)
           sendPushToDecorator(db, dp.id, {
             title: '🎁 New gift order!',
-            body: `Gift delivery · Rs.${giftOrder.gift_total} · ${(giftOrder.delivery_address || 'Tap to view').slice(0, 60)}. Tap to accept.`,
+            body: `Gift delivery · Prepaid · ${(giftOrder.delivery_address || 'Tap to view').slice(0, 60)}. Tap to accept.`,
             tag: `fd-gift-${payment.order_id.slice(0, 8)}`,
             url: '/',
           }).catch(() => {})

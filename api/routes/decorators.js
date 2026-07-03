@@ -601,6 +601,19 @@ router.post('/dp/accept-order', requireDp, asyncRoute(async (req, res, ok, err) 
     { id: order_id, $or: [{ delivery_person_id: null }, { delivery_person_id: { $exists: false } }] },
     { $set: { delivery_person_id: dpId, delivery_status: 'assigned' } }
   )
+  // Close the concurrent-accept race: two accepts tapped at the same moment can both pass the
+  // pre-check before either write lands. Re-check AFTER writing; if this accept now overlaps
+  // another commitment, roll it back and reject.
+  const afterCommitments = await decoratorCommitments(db, dpId)
+  const postClash = scheduleConflictAgainst(afterCommitments, order.delivery_slot, 'decoration', order_id)
+  if (postClash) {
+    await db.collection('orders').updateOne({ id: order_id }, { $pull: { accepted_decorators: dpId } })
+    await db.collection('orders').updateOne(
+      { id: order_id, delivery_person_id: dpId },
+      { $set: { delivery_person_id: null, delivery_status: 'pending' } }
+    )
+    return err(scheduleClashMessage(postClash), 409)
+  }
   return ok({ success: true, message: 'Order accepted successfully' })
 }))
 

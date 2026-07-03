@@ -132,6 +132,18 @@ router.post('/dp/accept-gift-order', requireDp, asyncRoute(async (req, res, ok, 
   const update = { $addToSet: { accepted_decorators: dpId } }
   if (!giftOrder.delivery_person_id) update.$set = { delivery_person_id: dpId, delivery_status: 'assigned' }
   await db.collection('gift_orders').updateOne({ id: order_id }, update)
+  // Close the concurrent-accept race (same as dp/accept-order): re-check after writing and
+  // roll back if this accept created an overlap with another commitment.
+  const afterCommitments = await decoratorCommitments(db, dpId)
+  const postClash = scheduleConflictAgainst(afterCommitments, giftOrder.delivery_slot, 'gift', order_id)
+  if (postClash) {
+    await db.collection('gift_orders').updateOne({ id: order_id }, { $pull: { accepted_decorators: dpId } })
+    await db.collection('gift_orders').updateOne(
+      { id: order_id, delivery_person_id: dpId },
+      { $set: { delivery_person_id: null, delivery_status: 'pending' } }
+    )
+    return err(scheduleClashMessage(postClash), 409)
+  }
   return ok({ success: true, message: 'Gift order accepted successfully' })
 }))
 
