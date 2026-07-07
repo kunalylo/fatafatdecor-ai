@@ -42,6 +42,10 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 # OPENAI_IMAGE_MODEL env var on Railway.
 OPENAI_IMAGE_MODEL = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-2")
 
+# medium ≈ 60-80s and fits the mobile apps' 90s client timeout; set
+# OPENAI_IMAGE_QUALITY=high on Railway once clients with longer timeouts roll out.
+OPENAI_IMAGE_QUALITY = os.environ.get("OPENAI_IMAGE_QUALITY", "medium")
+
 
 def _image_edit_call(client, image_param, prompt: str, size: str):
     """
@@ -51,7 +55,7 @@ def _image_edit_call(client, image_param, prompt: str, size: str):
     the input_fidelity parameter — only send it for gpt-image-1.
     """
     def _call(model: str):
-        kwargs = dict(model=model, image=image_param, prompt=prompt, n=1, size=size, quality="high")
+        kwargs = dict(model=model, image=image_param, prompt=prompt, n=1, size=size, quality=OPENAI_IMAGE_QUALITY)
         if model.startswith("gpt-image-1"):
             kwargs["extra_body"] = {"input_fidelity": "high"}
         return client.images.edit(**kwargs)
@@ -121,6 +125,11 @@ class GenerateTagsRequest(BaseModel):
     theme: str = ""
     setup_type: str = ""
     detected_items_summary: str = ""
+
+
+class ValidateRoomRequest(BaseModel):
+    """Pre-generation check that the customer's photo is a decoratable space."""
+    image_base64: str
 
 
 class ReferenceStyleTransferRequest(BaseModel):
@@ -423,6 +432,58 @@ def _build_decoration_prompt(
 
 
 # ── Routes ───────────────────────────────────────────────────
+
+VALIDATE_ROOM_PROMPT = """You check whether a customer's photo can be used to plan event decoration of their room or space.
+
+USABLE (usable=true): any indoor space where at least one wall AND some floor or ceiling context is visible — even if empty, cluttered, small, or imperfectly lit. Outdoor gardens, terraces, and halls with clear ground and background also count. Be lenient: when in doubt, mark usable.
+
+NOT USABLE (usable=false) — reason codes:
+- "close_up": an extreme close-up of a curtain, window, door, or wall texture filling the whole frame with no floor/ceiling context of the room
+- "screen_photo": a photograph of a phone/TV/computer screen that is showing a room
+- "no_room": sky, trees, street, vehicles, documents, food, or a person/selfie/pet with no interior space visible
+- "too_dark": too dark or blurry to make out the space at all
+
+Respond ONLY with JSON:
+{"usable": true|false, "reason": "<code or empty>", "message": "<one friendly sentence telling the customer HOW to retake the photo, e.g. 'Please step back and capture the full wall you want decorated, with some floor and ceiling visible.'>"}"""
+
+
+@app.post("/validate-room")
+async def validate_room(req: ValidateRoomRequest):
+    """
+    Fast, cheap vision pre-check (gpt-4o-mini, low detail) before the expensive
+    generation call. Fail-open: any validator problem returns usable=true so
+    generation is never blocked by the validator itself.
+    """
+    if not OPENAI_API_KEY:
+        return {"usable": True, "reason": "validator_unavailable", "message": ""}
+    try:
+        jpeg = await asyncio.to_thread(_compress_image, req.image_base64, 512, 80)
+        data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("utf-8")
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": VALIDATE_ROOM_PROMPT},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Classify this photo."},
+                    {"type": "image_url", "image_url": {"url": data_url, "detail": "low"}},
+                ]},
+            ],
+            max_tokens=150,
+            temperature=0,
+        )
+        parsed = parse_json_safe(resp.choices[0].message.content)
+        return {
+            "usable":  bool(parsed.get("usable", True)),
+            "reason":  parsed.get("reason", ""),
+            "message": parsed.get("message", ""),
+        }
+    except Exception as e:
+        print(f"[validate-room] error (fail-open): {e}")
+        return {"usable": True, "reason": "validator_error", "message": ""}
+
 
 @app.get("/health")
 async def health():

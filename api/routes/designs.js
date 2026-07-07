@@ -43,6 +43,27 @@ async function uploadToImageKit(base64OrUrl, designId, folder = '/generated', fi
   }
 }
 
+// Returns a retake-guidance message when the photo is unusable, else null.
+// Fail-open: validator being down never blocks generation.
+async function validateRoomPhoto(original_image) {
+  if (!original_image || !original_image.includes('base64')) return null
+  try {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 15000)
+    const res = await fetch(`${AI_SERVICE_URL}/validate-room`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_base64: original_image }),
+      signal: ctrl.signal,
+    })
+    clearTimeout(t)
+    const v = await res.json()
+    if (v && v.usable === false) {
+      return v.message || 'This photo cannot be decorated. Please step back and capture the full room — include the wall you want decorated, with some floor and ceiling visible.'
+    }
+  } catch { /* validator down — proceed */ }
+  return null
+}
+
 // POST /designs/generate — requires JWT
 router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
@@ -57,6 +78,10 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
   const bMax = Number(budget_max) || 5000
   if (!VALID_BUDGETS.some(([mn, mx]) => mn === bMin && mx === bMax)) return err('Invalid budget range', 400)
   const safeDescription = description ? String(description).slice(0, 200) : ''
+
+  // ── Room-photo quality gate (fail-open) — reject unusable photos before charging ──
+  const gate = await validateRoomPhoto(original_image)
+  if (gate) return err(gate, 422)
 
   // ── Deduct credit atomically BEFORE AI call (prevents race condition) ────
   const creditResult = await db.collection('users').findOneAndUpdate(
@@ -78,7 +103,7 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
         const refDesignId = uuidv4()
         const originalUploadPromise = uploadToImageKit(original_image, refDesignId, '/rooms', `room_${refDesignId}.jpg`).catch(() => null)
         const controller = new AbortController()
-        const timeout    = setTimeout(() => controller.abort(), 120000)
+        const timeout    = setTimeout(() => controller.abort(), 240000)
         const styleRes = await fetch(`${AI_SERVICE_URL}/style-transfer-from-reference`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -319,6 +344,12 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
   if (!bracket) return err('Could not identify bracket for given budget range', 400)
   const safeDescription = description ? String(description).slice(0, 200) : ''
 
+  // ── Room-photo quality gate (cheap vision check, fail-open) ─────────
+  // Customers often upload curtain/window close-ups or screen photos that
+  // can't be decorated. Reject BEFORE deducting a credit, with retake guidance.
+  const gate = await validateRoomPhoto(original_image)
+  if (gate) return err(gate, 422)
+
   // ── Atomic credit deduction (same contract as legacy endpoint) ──────
   const creditResult = await db.collection('users').findOneAndUpdate(
     { id: user_id, credits: { $gt: 0 } },
@@ -359,7 +390,7 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
   // ── Style transfer via FastAPI multi-image gpt-image-1 ──────────────
   try {
     const controller = new AbortController()
-    const timeout    = setTimeout(() => controller.abort(), 150000)
+    const timeout    = setTimeout(() => controller.abort(), 240000)
     const styleRes = await fetch(`${AI_SERVICE_URL}/style-transfer-from-reference`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
