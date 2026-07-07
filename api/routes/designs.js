@@ -143,7 +143,7 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
             kit_id: null, kit_name: null, kit_items: [], kit_cost: 0,
             addon_items: legacyItems, addon_cost: breakdown.total,
             items_used:  legacyItems,
-            ai_selected: true, status: 'generated', flow: 'reference', created_at: new Date(),
+            ai_selected: true, image_model: data.model_used || null, status: 'generated', flow: 'reference', created_at: new Date(),
           }
           await db.collection('designs').insertOne(design)
           await db.collection('reference_designs').updateOne({ id: picked.id }, { $inc: { view_count: 1 } })
@@ -344,6 +344,7 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
   let decoratedImageUrl = null
   let originalImageUrl  = null
   let aiSucceeded = false
+  let aiModelUsed = null
 
   // Upload customer's room photo to ImageKit in parallel with AI call.
   // This is what the decorator sees on the job sheet — the actual canvas
@@ -375,6 +376,7 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
     clearTimeout(timeout)
     const data = await styleRes.json()
     if (!data.success || !data.image_url) throw new Error(data.detail || 'Style transfer failed')
+    aiModelUsed = data.model_used || null
 
     // Upload AI result + finalize the parallel room-photo upload
     const [uploaded, roomUrl] = await Promise.all([
@@ -442,6 +444,7 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
     customer_breakdown: breakdown,
 
     ai_selected: aiSucceeded,
+    image_model: aiModelUsed,             // which OpenAI image model produced this
     status: 'generated',
     flow:   'reference',                  // distinguishes from legacy kit-based designs
     created_at: new Date(),

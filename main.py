@@ -37,6 +37,33 @@ os.environ["FAL_KEY"] = FAL_KEY
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
+# Image model — gpt-image-2 (state of the art) with automatic fallback to
+# gpt-image-1 when the account/org doesn't have access yet. Override with the
+# OPENAI_IMAGE_MODEL env var on Railway.
+OPENAI_IMAGE_MODEL = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-2")
+
+
+def _image_edit_call(client, image_param, prompt: str, size: str):
+    """
+    images.edit with the configured model; falls back to gpt-image-1 once if the
+    configured model is unavailable. Returns (response, model_used).
+    gpt-image-2 processes all inputs at high fidelity automatically and rejects
+    the input_fidelity parameter — only send it for gpt-image-1.
+    """
+    def _call(model: str):
+        kwargs = dict(model=model, image=image_param, prompt=prompt, n=1, size=size, quality="high")
+        if model.startswith("gpt-image-1"):
+            kwargs["extra_body"] = {"input_fidelity": "high"}
+        return client.images.edit(**kwargs)
+
+    try:
+        return _call(OPENAI_IMAGE_MODEL), OPENAI_IMAGE_MODEL
+    except Exception as e:
+        if OPENAI_IMAGE_MODEL != "gpt-image-1":
+            print(f"[image-edit] {OPENAI_IMAGE_MODEL} failed ({e}); falling back to gpt-image-1")
+            return _call("gpt-image-1"), "gpt-image-1"
+        raise
+
 NO_TEXT = (
     "Do NOT add any text, words, letters, numbers, or labels anywhere in the image — "
     "no text on balloons, banners, backdrops, walls, or any surface. Completely text-free."
@@ -176,18 +203,12 @@ async def run_gpt_image_edit(prompt: str, image_bytes: bytes) -> str:
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
 
-    response = await asyncio.to_thread(
-        client.images.edit,
-        model="gpt-image-1",
-        image=("room.jpg", image_bytes, "image/jpeg"),
-        prompt=prompt,
-        n=1,
-        size=_best_output_size(image_bytes),
-        quality="high",
-        # extra_body is version-proof: works even if the installed SDK
-        # predates the named input_fidelity kwarg.
-        extra_body={"input_fidelity": "high"},
+    response, model_used = await asyncio.to_thread(
+        _image_edit_call, client,
+        ("room.jpg", image_bytes, "image/jpeg"),
+        prompt, _best_output_size(image_bytes),
     )
+    print(f"[image-edit] single-image via {model_used}")
     b64 = response.data[0].b64_json
     return f"data:image/png;base64,{b64}"
 
@@ -206,21 +227,17 @@ async def run_gpt_image_edit_with_reference(
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
 
-    response = await asyncio.to_thread(
-        client.images.edit,
-        model="gpt-image-1",
-        image=[
+    response, model_used = await asyncio.to_thread(
+        _image_edit_call, client,
+        [
             ("room.jpg",      room_bytes,      "image/jpeg"),
             ("reference.jpg", reference_bytes, "image/jpeg"),
         ],
-        prompt=prompt,
-        n=1,
-        size=_best_output_size(room_bytes),
-        quality="high",
-        extra_body={"input_fidelity": "high"},
+        prompt, _best_output_size(room_bytes),
     )
+    print(f"[image-edit] style-transfer via {model_used}")
     b64 = response.data[0].b64_json
-    return f"data:image/png;base64,{b64}"
+    return f"data:image/png;base64,{b64}", model_used
 
 
 async def run_flux_schnell(prompt: str, fal_client) -> str:
@@ -1075,12 +1092,13 @@ async def style_transfer_from_reference(req: ReferenceStyleTransferRequest):
         prompt = _build_style_transfer_prompt(req.occasion, req.theme, req.room_type, req.description)
         print(f"\n{'='*60}\n[STYLE TRANSFER PROMPT]\n{prompt}\n{'='*60}\n")
 
-        # Multi-image gpt-image-1
-        image_url = await run_gpt_image_edit_with_reference(prompt, room_bytes, ref_bytes)
+        # Multi-image edit (gpt-image-2, falls back to gpt-image-1)
+        image_url, model_used = await run_gpt_image_edit_with_reference(prompt, room_bytes, ref_bytes)
 
         return {
             "success": True,
             "image_url": image_url,
+            "model_used": model_used,
             "prompt_used": prompt,
         }
     except Exception as e:
