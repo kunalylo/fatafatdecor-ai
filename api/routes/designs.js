@@ -114,7 +114,7 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
             image_url: '', is_kit_item: false, is_rentable: false,
           }))
           const itemsSum = legacyItems.reduce((s, i) => s + i.price * i.quantity, 0)
-          const feeLine  = Math.max(0, Math.round(breakdown.total - itemsSum))
+          const feeLine  = Math.max(0, +(breakdown.total - itemsSum).toFixed(2))   // exact — Σitems === total_cost
           if (feeLine > 0) legacyItems.push({
             id: uuidv4(), name: 'Setup, transport, fees & GST (18%)', description: 'Delivery, setup, platform fees and GST',
             price: feeLine, quantity: 1, category: 'fees', color: '', size: '', image_url: '', is_kit_item: false, is_rentable: false,
