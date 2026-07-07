@@ -963,6 +963,9 @@ def _build_style_transfer_prompt(occasion: str, theme: str, room_type: str, desc
         "on/off, do not relocate them, do not redecorate them.",
         "• Existing objects on tables, shelves, floor (bottles, books, vases, "
         "plants, cushions, blankets): keep them where they are.",
+        "• PEOPLE AND PETS: if any person or pet is visible in image 1, keep "
+        "them EXACTLY as photographed — same face, same pose, same clothing, "
+        "same position. Never redraw, beautify, move, or remove them.",
         "• The room's lighting can ONLY gain warm decorative glow from the "
         "added decorations — do not change the existing daylight, lamps, "
         "shadows, or time-of-day.",
@@ -978,8 +981,8 @@ def _build_style_transfer_prompt(occasion: str, theme: str, room_type: str, desc
         "• Backdrops on a clear wall ONLY — foil curtain / net / disco / pleated "
         "fabric / paper fans. Place against an empty wall section of image 1; "
         "never over a window, door, TV, painting, or furniture.",
-        "• Foil shapes (numbers, letters, hearts, stars, bottles) — drawn from the "
-        "reference style.",
+        "• Foil shapes (hearts, stars, bottles, crowns, butterflies) — drawn from "
+        "the reference style. NEVER letter-shaped or number-shaped balloons.",
         "• Light strings, LED curtains, fairy lights, neon signs — draped over "
         "decorations, NOT replacing existing fixtures.",
         "• Floral arrangements, ribbons, drapes, confetti — placed near or on "
@@ -989,16 +992,46 @@ def _build_style_transfer_prompt(occasion: str, theme: str, room_type: str, desc
         "STYLE TO MATCH (image 2 — the reference):",
         "═══════════════════════════════════════════════════════════════",
         "• Colour palette: every dominant colour in the reference.",
-        "• Density and clustering of balloons and props.",
+        "• Density and clustering of balloons and props — but scaled sensibly "
+        "to the room (see REALISM below).",
         "• Backdrop type, material, and placement style.",
         "• Decorative composition and focal points.",
         "• Overall mood and warmth of the celebration.",
+        "",
+        "═══════════════════════════════════════════════════════════════",
+        "REALISM — must look like a real decorator's work:",
+        "═══════════════════════════════════════════════════════════════",
+        "• Concentrate the decoration on ONE main focal area — the largest "
+        "clear wall or corner — exactly as a professional decorator would. "
+        "Do NOT bury every wall, the ceiling, and the furniture in balloons.",
+        "• The setup must be physically achievable by a two-person team in a "
+        "few hours: balloons attach to walls and stands, garlands follow "
+        "gravity, backdrops stand on the floor against a wall.",
+        "• Most of the room should remain clearly recognizable and livable "
+        "around the decorated focal area.",
+        "",
+        "═══════════════════════════════════════════════════════════════",
+        "TEXT RULE (STRICT — most common failure, read carefully):",
+        "═══════════════════════════════════════════════════════════════",
+        "• If the reference (image 2) contains ANY text — 'Happy Birthday' "
+        "banners, neon word signs, letter balloons, number balloons, name "
+        "cutouts — DO NOT copy them. Replace each with plain round balloons, "
+        "a heart/star foil shape, or a floral piece in the SAME colours and "
+        "position, so the composition still matches.",
+        "• Never invent ages, names, or messages. A wrong number or name "
+        "ruins the customer's event.",
         "",
     ]
     if occasion: parts.append(f"Occasion context: {occasion.replace('_', ' ')}.")
     if theme:    parts.append(f"Theme: {theme}.")
     if room_type:parts.append(f"Room type: {room_type}.")
-    if description: parts.append(f"Customer special request: {description}.")
+    if description:
+        parts.append(f"Customer special request: {description}.")
+        parts.append(
+            "ONLY if this special request explicitly names a specific number, "
+            "name, or word to display, you may render exactly that (and nothing "
+            "else) as a foil balloon or sign."
+        )
     parts.extend([
         "",
         STYLE_TRANSFER_NO_TEXT,
