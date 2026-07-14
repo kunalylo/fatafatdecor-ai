@@ -180,6 +180,7 @@ function bestCandidateByAttributes(candidates, detection) {
     if (cc === dc) return 2
     return (cc.includes(dc) || dc.includes(cc)) ? 1 : 0
   }
+  const dsh = String(detection.shape || '').toLowerCase().trim()
   let best = null, bestScore = -1
   for (const c of candidates) {
     const fam = colorFamily(c)
@@ -188,6 +189,11 @@ function bestCandidateByAttributes(candidates, detection) {
     const cf = String(c.finish || '').toLowerCase().trim()
     if (df && cf && (cf === df || cf.includes(df) || df.includes(cf))) score += 40
     if (ds && Number(c.size_inches)) score += Math.max(0, 30 - Math.abs(Number(c.size_inches) - ds) * 5)
+    // Shape match beats finish/size — a butterfly must not become a heart.
+    if (dsh && dsh !== 'round' && dsh !== 'other') {
+      const hay = `${c.shape || ''} ${c.subcategory || ''} ${c.sku_code || ''}`.toLowerCase()
+      if (hay.includes(dsh)) score += 80
+    }
     if (score > bestScore) { bestScore = score; best = c }
   }
   return best
@@ -219,7 +225,7 @@ async function findBestSkuMatch(db, detection) {
   // Specific-shape detections must match shape — these aren't substitutable with
   // any other foil balloon. If no shape match exists, auto-create.
   const SPECIFIC_SHAPES = ['bottle', 'number', 'letter']
-  const SOFT_SHAPES     = ['heart', 'star']
+  const SOFT_SHAPES     = ['heart', 'star', 'butterfly']
   const isSpecific      = SPECIFIC_SHAPES.includes(shape)
   const isSoftShape     = SOFT_SHAPES.includes(shape)
 
@@ -495,7 +501,9 @@ async function runReferencePipeline(referenceId) {
         setup_complexity:    detection.setup_complexity || 'medium',
         estimated_setup_minutes: detection.estimated_setup_minutes || 60,
         updated_at: new Date(),
-      }},
+      },
+      // Clear any stale failure reason from a previous errored run
+      $unset: { rejection_reason: '' } },
     )
 
     // 6. Update inventory usage tracking so admin can filter "Used in references"
