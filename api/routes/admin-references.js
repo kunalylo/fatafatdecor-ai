@@ -779,6 +779,57 @@ router.get('/admin/references', asyncRoute(async (req, res, ok) => {
 // ── STATIC-PATH ROUTES MUST BE BEFORE /:id ──────────────────────
 // (Express matches in order — /:id swallows literal paths otherwise.)
 
+// POST /admin/references/refresh-all — re-run the full AI pipeline on every
+// reference (approved/pending_review/error), one at a time in the background.
+// Approved references are re-approved immediately after each refresh so they
+// never leave customer rotation. Progress is tracked in system_jobs.
+router.post('/admin/references/refresh-all', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  const jobs = db.collection('system_jobs')
+  const running = await jobs.findOne({ _id: 'refresh_all_references', status: 'running' })
+  if (running) return ok({ started: false, message: 'Refresh already running', progress: { done: running.done, total: running.total } })
+
+  const refs = await db.collection('reference_designs')
+    .find({ status: { $in: ['approved', 'pending_review', 'error'] } })
+    .project({ id: 1, status: 1, theme: 1 })
+    .toArray()
+  await jobs.updateOne(
+    { _id: 'refresh_all_references' },
+    { $set: { status: 'running', total: refs.length, done: 0, failed: [], current: '', started_at: new Date() } },
+    { upsert: true },
+  )
+
+  ;(async () => {
+    let done = 0
+    const failed = []
+    for (const r of refs) {
+      const wasApproved = r.status === 'approved'
+      await jobs.updateOne({ _id: 'refresh_all_references' }, { $set: { current: r.theme || r.id } })
+      try {
+        // Direct pipeline call (not the /rerun route) — status stays 'approved'
+        // during processing, so the reference never drops out of rotation.
+        await runReferencePipeline(r.id)
+        const after = await db.collection('reference_designs').findOne({ id: r.id }, { projection: { status: 1, rejection_reason: 1 } })
+        if (after?.status === 'error') failed.push({ id: r.id, theme: r.theme, error: after.rejection_reason || 'unknown' })
+        if (wasApproved) {
+          await db.collection('reference_designs').updateOne({ id: r.id }, { $set: { status: 'approved' } })
+        }
+      } catch (e) {
+        failed.push({ id: r.id, theme: r.theme, error: e.message })
+        if (wasApproved) await db.collection('reference_designs').updateOne({ id: r.id }, { $set: { status: 'approved' } })
+      }
+      done++
+      await jobs.updateOne({ _id: 'refresh_all_references' }, { $set: { done, failed, updated_at: new Date() } })
+      // breathing room between references — keeps fal/OpenAI rate limits happy
+      await new Promise(rr => setTimeout(rr, 4000))
+    }
+    await jobs.updateOne({ _id: 'refresh_all_references' }, { $set: { status: 'finished', current: '', finished_at: new Date() } })
+    console.log(`[refresh-all] finished: ${done} refs, ${failed.length} failed`)
+  })().catch(e => console.error('[refresh-all] crashed:', e))
+
+  return ok({ started: true, total: refs.length })
+}))
+
 // POST /admin/references/backfill-sku-usage — rebuild master_inventory.used_in_references
 // from scratch for all references. Safe to re-run.
 router.post('/admin/references/backfill-sku-usage', asyncRoute(async (req, res, ok) => {
