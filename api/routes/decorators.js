@@ -568,6 +568,24 @@ router.get('/dp/order-detail/:id', requireDp, asyncRoute(async (req, res, ok, er
   }
   const { _id: _1, password: _2, ...safeUser }   = user || {}
   const { _id: _3,               ...cleanOrder } = order
+
+  // Enrich procurement items with their SKU's product image — the decorator
+  // should see WHAT each item looks like, not decode SKU codes.
+  if (Array.isArray(cleanOrder.items) && cleanOrder.items.length > 0) {
+    const codes = [...new Set(cleanOrder.items.map(i => i.matched_sku_code).filter(Boolean))]
+    if (codes.length > 0) {
+      const skus = await db.collection('master_inventory')
+        .find({ sku_code: { $in: codes } })
+        .project({ sku_code: 1, image_url: 1 })
+        .toArray()
+      const imgBySku = Object.fromEntries(skus.map(s => [s.sku_code, s.image_url || null]))
+      cleanOrder.items = cleanOrder.items.map(i => ({
+        ...i,
+        item_image_url: i.matched_sku_code ? (imgBySku[i.matched_sku_code] || null) : null,
+      }))
+    }
+  }
+
   return ok({ ...cleanOrder, customer: safeUser, decorated_image: design?.decorated_image || null, kit_name: design?.kit_name || null, kit_id: design?.kit_id || null, kit_info: kitInfo, kit_items: design?.kit_items || [], addon_items: design?.addon_items || [] })
 }))
 
