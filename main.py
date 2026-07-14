@@ -132,6 +132,17 @@ class ValidateRoomRequest(BaseModel):
     image_base64: str
 
 
+class GenerateItemImageRequest(BaseModel):
+    """Attributes of a master_inventory SKU → clean product-shot image."""
+    category: str = ""
+    subcategory: str = ""
+    color: str = ""
+    finish: str = ""
+    shape: str = ""
+    size_inches: float = 0
+    material: str = ""
+
+
 class ReferenceStyleTransferRequest(BaseModel):
     """Customer's room + reference image → decorated room (multi-image gpt-image-1)."""
     room_image_base64: str       # data URL or raw base64 of customer's room photo
@@ -495,7 +506,7 @@ async def health():
         "selection_model": "gemini-flash-1.5 via fal any-llm",
         "endpoints": [
             "/smart-generate", "/generate", "/analyze-decoration",
-            "/detect-items", "/match-skus", "/generate-tags",
+            "/detect-items", "/match-skus", "/generate-tags", "/generate-item-image",
             "/style-transfer-from-reference",
         ],
     }
@@ -820,8 +831,34 @@ DETECT_SYSTEM_PROMPT = (
     "• Holographic = iridescent rainbow shimmer\n\n"
     "COLOR: use specific names — White, Ivory, Cream, Champagne Gold, Gold, Rose Gold, "
     "Silver, Black, Pink, Hot Pink, Baby Pink, Red, Maroon, Blue, Navy, Pastel Blue, etc.\n\n"
+    "SCAN THE WHOLE IMAGE ZONE BY ZONE before answering — ceiling, backdrop wall, "
+    "left edge, right edge, floor, tables, background. Balloons are never the only "
+    "items: also check for lights (fairy/LED/neon signs), drapes/curtains/net fabric, "
+    "flowers (real or artificial), foil fringe curtains, banners, streamers, table "
+    "decor, candles, lanterns, stands/arch frames, welcome boards and floor props.\n\n"
     "NEVER skip an item type that is clearly visible. Look at the image multiple times."
 )
+
+# Second-pass sweep: given what pass 1 found, hunt ONLY for what it missed.
+# Single-pass vision fixates on the dominant balloons and skips secondary items.
+DETECT_SWEEP_PROMPT = """A first analysis of this decoration photo already found these items:
+
+{found}
+
+Now re-examine the ENTIRE image and list ONLY items that are MISSING from that list.
+Check specifically (zone by zone — ceiling, backdrop, edges, floor, tables, background):
+- lights: fairy/string lights, LED curtains, neon signs, spotlights, lamps
+- fabric: drapes, curtains, net/tulle, table skirts, carpets/mats
+- flowers: real or artificial arrangements, garlands, petals
+- foil fringe curtains, banners, streamers, tassels, hanging swirls
+- props: welcome boards, cake stands, letter blocks, teddy bears, pedestals, crowns
+- structures: arch frames, backdrop stands, pillars
+- balloon clusters in the BACKGROUND or at the EDGES the first pass may have missed
+- any balloon size/color variant not in the list above
+
+Return strict JSON with the SAME item schema as before:
+{{"items": [ ... ]}}
+If truly nothing was missed, return {{"items": []}}."""
 
 DETECT_USER_PROMPT = """Analyze this decoration photo VERY thoroughly. Count balloons aggressively.
 
@@ -918,11 +955,51 @@ async def detect_items(req: DetectItemsRequest):
         raw = response.choices[0].message.content
         parsed = parse_json_safe(raw)
 
+        # ── Pass 2: completeness sweep — catch items pass 1 missed ──
+        # Fail-open: any error here keeps the pass-1 result.
+        items = parsed.get("items", []) or []
+        try:
+            found_summary = "\n".join(
+                f"- {i.get('quantity', 1)}x {i.get('color', '')} {i.get('finish', '')} "
+                f"{i.get('type', '')} {i.get('shape', '')} {i.get('size_inches', '')}\"".strip()
+                for i in items
+            ) or "(nothing found)"
+            sweep = await asyncio.to_thread(
+                client.chat.completions.create,
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": DETECT_SYSTEM_PROMPT},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": DETECT_SWEEP_PROMPT.format(found=found_summary)},
+                        {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}},
+                    ]},
+                ],
+                max_tokens=2000,
+                temperature=0.2,
+            )
+            sweep_parsed = parse_json_safe(sweep.choices[0].message.content)
+            extra = sweep_parsed.get("items", []) or []
+            if extra:
+                def _key(i):
+                    return (
+                        str(i.get("type", "")).lower(), str(i.get("color", "")).lower(),
+                        str(i.get("finish", "")).lower(), str(i.get("shape", "")).lower(),
+                        int(i.get("size_inches") or 0),
+                    )
+                seen = {_key(i) for i in items}
+                added = [i for i in extra if _key(i) not in seen]
+                if added:
+                    print(f"[detect-items] sweep pass added {len(added)} missed item(s): "
+                          + ", ".join(f"{i.get('color','')} {i.get('type','')}" for i in added))
+                    items = items + added
+        except Exception as sweep_err:
+            print(f"[detect-items] sweep pass failed (keeping pass-1 items): {sweep_err}")
+
         return {
             "success": True,
             "is_screenshot":     parsed.get("is_screenshot", False),
             "is_decoration_photo": parsed.get("is_decoration_photo", True),
-            "items":              parsed.get("items", []),
+            "items":              items,
             "color_palette":      parsed.get("color_palette", []),
             "dominant_mood":      parsed.get("dominant_mood", ""),
             "setup_complexity":   parsed.get("setup_complexity", "medium"),
@@ -1165,6 +1242,59 @@ async def style_transfer_from_reference(req: ReferenceStyleTransferRequest):
     except Exception as e:
         print(f"[style-transfer] error:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _build_item_image_prompt(req: "GenerateItemImageRequest") -> str:
+    """Category-aware e-commerce product-shot prompt for a single inventory SKU."""
+    color  = (req.color or "").strip()
+    finish = (req.finish or "").strip()
+    shape  = (req.shape or "round").strip().lower()
+    size   = f'{int(req.size_inches)}-inch ' if req.size_inches else ""
+    cat    = (req.category or "").lower()
+
+    if "latex" in cat or ("balloon" in cat and "foil" not in cat and "backdrop" not in cat):
+        subject = f"a single inflated {size}{color} {finish} latex balloon"
+    elif "backdrop" in cat:
+        subject = f"a single {color} {finish} round foil balloon backdrop panel unit"
+    elif "foil" in cat:
+        shape_txt = {"round": "round", "heart": "heart-shaped", "star": "star-shaped",
+                     "bottle": "champagne-bottle-shaped", "number": "number-digit-shaped",
+                     "letter": "letter-shaped"}.get(shape, shape)
+        subject = f"a single inflated {size}{color} {shape_txt} foil mylar balloon"
+    elif "light" in cat:
+        subject = f"a coil of {color or 'warm white'} decorative LED fairy string lights"
+    elif "flower" in cat:
+        subject = f"a small bunch of artificial {color} decorative flowers"
+    else:
+        name = (req.subcategory or req.category or "decoration item").strip()
+        subject = f"a single {color} {name} party decoration item"
+
+    return (
+        f"Professional e-commerce product photograph of {subject}, centered on a seamless "
+        "clean white studio background, soft even studio lighting, subtle soft shadow, "
+        "high detail, photorealistic. No text, no watermark, no logo, no people, no hands, "
+        "no other objects — the product only."
+    )
+
+
+@app.post("/generate-item-image")
+async def generate_item_image(req: GenerateItemImageRequest):
+    """
+    Generate a clean product-shot image for an inventory SKU (FLUX schnell via fal —
+    ~2-4s, fractions of a cent). Used so every master_inventory item has an image:
+    admin bulk-fills missing ones, and auto-created SKUs get one automatically.
+    """
+    if not FAL_KEY:
+        return {"success": False, "error": "FAL_KEY not configured"}
+    import fal_client
+
+    prompt = _build_item_image_prompt(req)
+    try:
+        url = await run_flux_schnell(prompt, fal_client)
+        return {"success": True, "image_url": url, "prompt_used": prompt}
+    except Exception as e:
+        print(f"[item-image] error: {e}")
+        return {"success": False, "error": str(e)}
 
 
 @app.post("/generate-tags")

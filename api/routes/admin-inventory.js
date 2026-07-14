@@ -8,6 +8,7 @@ import XLSX from 'xlsx'
 import { connectToMongo } from '../db.js'
 import { requireAdmin } from '../jwt.js'
 import { asyncRoute } from '../helpers.js'
+import { generateAndAttachItemImage, uploadItemImageToImageKit } from '../lib/item-image.js'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } })
@@ -85,10 +86,11 @@ router.get('/admin/inventory/stats', asyncRoute(async (req, res, ok) => {
     }
   }
 
-  const [total, autoCreated, usedCount, byCategory, byColor, byFinish] = await Promise.all([
+  const [total, autoCreated, usedCount, withImages, byCategory, byColor, byFinish] = await Promise.all([
     col.countDocuments({ active: true }),
     col.countDocuments({ active: true, auto_created: true }),
     col.countDocuments({ active: true, used_in_references: { $exists: true, $not: { $size: 0 } } }),
+    col.countDocuments({ active: true, image_url: { $exists: true, $nin: [null, ''] } }),
     col.aggregate([
       { $match: { active: true } },
       { $group: { _id: '$category', count: { $sum: 1 } } },
@@ -111,6 +113,8 @@ router.get('/admin/inventory/stats', asyncRoute(async (req, res, ok) => {
     total,
     auto_created: autoCreated,
     used_in_references: usedCount,
+    with_images: withImages,
+    missing_images: Math.max(0, total - withImages),
     categories: byCategory.map(c => ({ name: c._id, count: c.count })),
     colors:     byColor.map(c => ({ name: c._id, count: c.count })),
     finishes:   byFinish.map(c => ({ name: c._id, count: c.count })),
@@ -166,6 +170,7 @@ router.post('/admin/inventory/items', asyncRoute(async (req, res, ok, err) => {
     inventory_status:       String(b.inventory_status || 'Active'),
     budget_fit:             String(b.budget_fit || ''),
     source_url:             String(b.source_url || ''),
+    image_url:              String(b.image_url || ''),
     image_search_ref:       String(b.image_search_ref || ''),
     ai_usage_notes:         String(b.ai_usage_notes || ''),
     stock_count:            Number(b.stock_count) || 0,
@@ -175,8 +180,90 @@ router.post('/admin/inventory/items', asyncRoute(async (req, res, ok, err) => {
     updated_at: new Date(),
   }
   await db.collection('master_inventory').insertOne(doc)
+
+  // Every item gets an image: if admin didn't supply one, AI-generate a clean
+  // product shot in the background (fire-and-forget — never blocks the save).
+  if (!doc.image_url) {
+    generateAndAttachItemImage(db, doc)
+      .catch(e => console.warn(`[inventory] auto image for ${doc.sku_code} failed:`, e.message))
+  }
+
   const { _id, ...clean } = doc
   return ok(clean)
+}))
+
+// ── POST /admin/inventory/items/:id/image — admin uploads a real photo ────
+router.post('/admin/inventory/items/:id/image', asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const { image_base64 } = req.body
+  if (!image_base64 || !String(image_base64).includes('base64')) {
+    return err('image_base64 (data URL) required')
+  }
+  const item = await db.collection('master_inventory').findOne(
+    { $or: [{ id: req.params.id }, { sku_code: req.params.id }] },
+  )
+  if (!item) return err('Item not found', 404)
+
+  const buffer = Buffer.from(String(image_base64).split(',', 2)[1], 'base64')
+  if (buffer.length > 8 * 1024 * 1024) return err('Image too large (max 8MB)')
+  const safe = String(item.sku_code || item.id).replace(/[^A-Za-z0-9_-]+/g, '_')
+  const ik = await uploadItemImageToImageKit(buffer, `item_${safe}.jpg`)
+
+  await db.collection('master_inventory').updateOne(
+    { id: item.id },
+    { $set: { image_url: ik.image_url, image_file_id: ik.file_id, image_auto_generated: false, updated_at: new Date() } },
+  )
+  return ok({ image_url: ik.image_url })
+}))
+
+// ── POST /admin/inventory/items/:id/generate-image — AI product shot ────
+router.post('/admin/inventory/items/:id/generate-image', asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const item = await db.collection('master_inventory').findOne(
+    { $or: [{ id: req.params.id }, { sku_code: req.params.id }] },
+  )
+  if (!item) return err('Item not found', 404)
+  try {
+    const url = await generateAndAttachItemImage(db, item)
+    return ok({ image_url: url })
+  } catch (e) {
+    return err('Image generation failed: ' + e.message, 500)
+  }
+}))
+
+// ── POST /admin/inventory/generate-missing-images — bulk fill ────
+// Processes a small batch per call ({limit}); the admin UI loops until
+// remaining = 0. Items used in references are filled first.
+router.post('/admin/inventory/generate-missing-images', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  const limit = Math.min(25, Math.max(1, Number(req.body?.limit) || 10))
+  const missingFilter = {
+    active: true,
+    $or: [{ image_url: { $exists: false } }, { image_url: null }, { image_url: '' }],
+  }
+
+  const batch = await db.collection('master_inventory')
+    .find(missingFilter)
+    .sort({ ai_used: -1, last_referenced_at: -1 })
+    .limit(limit)
+    .toArray()
+
+  let generated = 0
+  const failed = []
+  // Concurrency 3 — quick without hammering fal/ImageKit
+  for (let i = 0; i < batch.length; i += 3) {
+    const results = await Promise.allSettled(
+      batch.slice(i, i + 3).map(item => generateAndAttachItemImage(db, item)),
+    )
+    results.forEach((r, j) => {
+      if (r.status === 'fulfilled') generated++
+      else failed.push({ sku: batch[i + j].sku_code, error: r.reason?.message })
+    })
+  }
+  if (failed.length) console.warn('[inventory] bulk image failures:', JSON.stringify(failed.slice(0, 5)))
+
+  const remaining = await db.collection('master_inventory').countDocuments(missingFilter)
+  return ok({ generated, failed: failed.length, remaining })
 }))
 
 // ── PUT /admin/inventory/items/:id — update fields ────

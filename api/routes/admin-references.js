@@ -12,6 +12,7 @@ import { parseFilename } from '../lib/filename-parser.js'
 import { BUDGET_BRACKETS, bracketForPrice } from '../lib/budget-brackets.js'
 import { customerBreakdown, adminMargin } from '../lib/pricing-calc.js'
 import { estimateUnitCost, buildAutoSkuCode } from '../lib/sku-defaults.js'
+import { generateAndAttachItemImage } from '../lib/item-image.js'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } })
@@ -114,6 +115,10 @@ async function autoCreateSku(db, detection) {
     // Race condition — another concurrent upload created the same SKU
     return await db.collection('master_inventory').findOne({ sku_code })
   }
+  // Every item gets an image: AI-generate a product shot in the background
+  // (fire-and-forget — parse time is unaffected, failures are non-fatal).
+  generateAndAttachItemImage(db, doc)
+    .catch(err => console.warn(`[auto-sku] image for ${sku_code} failed:`, err.message))
   return doc
 }
 
@@ -800,6 +805,21 @@ router.get('/admin/references/:id', asyncRoute(async (req, res, ok, err) => {
   const ref = await db.collection('reference_designs').findOne({ id: req.params.id })
   if (!ref) return err('Reference not found', 404)
   const { _id, ...clean } = ref
+
+  // Enrich detected items with their SKU's image so the admin sees a
+  // thumbnail next to every item.
+  const codes = [...new Set((clean.detected_items || []).map(i => i.matched_sku_code).filter(Boolean))]
+  if (codes.length > 0) {
+    const skus = await db.collection('master_inventory')
+      .find({ sku_code: { $in: codes } })
+      .project({ sku_code: 1, image_url: 1 })
+      .toArray()
+    const imgBySku = Object.fromEntries(skus.map(s => [s.sku_code, s.image_url || null]))
+    clean.detected_items = (clean.detected_items || []).map(i => ({
+      ...i,
+      item_image_url: i.matched_sku_code ? (imgBySku[i.matched_sku_code] || null) : null,
+    }))
+  }
   return ok(clean)
 }))
 
