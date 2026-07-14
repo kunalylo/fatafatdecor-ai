@@ -11,7 +11,7 @@ import { AI_SERVICE_URL, IMAGEKIT_PRIVATE_KEY } from '../config.js'
 import { parseFilename } from '../lib/filename-parser.js'
 import { BUDGET_BRACKETS, bracketForPrice } from '../lib/budget-brackets.js'
 import { customerBreakdown, adminMargin } from '../lib/pricing-calc.js'
-import { estimateUnitCost, buildAutoSkuCode } from '../lib/sku-defaults.js'
+import { estimateUnitCost, buildAutoSkuCode, buildAutoDisplayName } from '../lib/sku-defaults.js'
 import { generateAndAttachItemImage } from '../lib/item-image.js'
 
 const router = Router()
@@ -86,6 +86,8 @@ async function autoCreateSku(db, detection) {
       detection.type === 'prop'          ? 'Props'  :
       'Other',
     subcategory: String(detection.subtype || detection.shape || detection.type || 'Auto'),
+    display_name: buildAutoDisplayName(detection),
+    description: String(detection.description || ''),
     brand_supplier: 'AUTO-CREATED — review and assign supplier',
     material: detection.type === 'foil_balloon' ? 'Foil/Mylar' : 'Latex/Other',
     finish: String(detection.finish || ''),
@@ -392,12 +394,18 @@ async function runReferencePipeline(referenceId) {
         itemsCostTotal  += lineCost
         itemsPriceTotal += linePrice
 
+        // Customer-visible name: auto-created SKUs carry a human display_name;
+        // otherwise build from SKU attrs (no underscores, no 0" suffix).
+        let skuName = match.sku.display_name
+          || [match.sku.color, String(match.sku.subcategory || '').replace(/_/g, ' '), match.sku.size_inches ? `${match.sku.size_inches}"` : ''].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim()
+        const textContent = String(det.text_content || det.character || '').trim()
+        if (textContent && !skuName.includes(`"${textContent}"`)) skuName += ` "${textContent}"`
+
         detectedItems.push({
           raw_detection:    `${qty}x ${det.color || ''} ${det.finish || ''} ${det.type || ''}${det.size_inches ? ` ${det.size_inches}"` : ''}`.replace(/\s+/g, ' ').trim(),
           matched_sku_code: match.sku.sku_code,
           matched_sku_id:   match.sku.id,
-          // Customer-visible name: no underscores, no meaningless 0" size suffix
-          sku_name:         [match.sku.color, String(match.sku.subcategory || '').replace(/_/g, ' '), match.sku.size_inches ? `${match.sku.size_inches}"` : ''].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim(),
+          sku_name:         skuName,
           category:         match.sku.category,
           quantity:         qty,
           unit_cost:        match.sku.per_unit_cost || 0,
@@ -406,6 +414,9 @@ async function runReferencePipeline(referenceId) {
           line_price:       linePrice,
           confidence:       match.confidence,
           reasoning:        match.reasoning,
+          description:      String(det.description || ''),
+          placement:        String(det.placement || ''),
+          text_content:     textContent,
           is_removable:     det.type === 'light' || det.subtype === 'led_curtain',
           raw: det,
         })
@@ -424,6 +435,9 @@ async function runReferencePipeline(referenceId) {
           line_price:       0,
           confidence:       'low',
           reasoning:        'No matching SKU found in master_inventory',
+          description:      String(det.description || ''),
+          placement:        String(det.placement || ''),
+          text_content:     String(det.text_content || det.character || '').trim(),
           is_removable:     false,
           raw: det,
         })

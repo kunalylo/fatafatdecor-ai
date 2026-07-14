@@ -57,16 +57,46 @@ export function estimateUnitCost(detection) {
 
 /**
  * Build a stable SKU code for an auto-created item.
- * Format: FD-AUTO-{TYPE}-{COLOR}-{SIZE}-{FINISH}
+ * Format: FD-AUTO-{TYPE}-{SHAPE/SUBTYPE}-{COLOR}-{SIZE}-{FINISH}
+ * The shape/subtype segment is what makes "pink butterfly foil" and
+ * "pink round foil" different SKUs instead of colliding.
  */
 export function buildAutoSkuCode(detection) {
+  const shapeSeg = String(detection.subtype || detection.shape || '')
+    .toUpperCase().replace(/[\s_]+/g, '')
   const parts = [
     'FD-AUTO',
     String(detection.type || 'other').toUpperCase().replace(/_/g, ''),
+    shapeSeg || null,
     String(detection.color || 'X').toUpperCase().replace(/\s+/g, ''),
     String(detection.size_inches || 0) + 'IN',
     String(detection.finish || 'X').toUpperCase().replace(/\s+/g, ''),
-  ]
+  ].filter(Boolean)
   // Sanitize: alphanumeric + hyphens only
   return parts.join('-').replace(/[^A-Z0-9-]/g, '').slice(0, 80)
+}
+
+/**
+ * Human-readable name for an auto-created item — what shows in item lists.
+ * "Pink Butterfly Foil Balloon 20\"", "Gold Letter Banner \"HAPPY BIRTHDAY\"".
+ */
+export function buildAutoDisplayName(detection) {
+  const cap = (s) => String(s || '').trim().replace(/[_]+/g, ' ')
+    .replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())
+  const typeName = {
+    latex_balloon: 'Latex Balloon', foil_balloon: 'Foil Balloon',
+    backdrop: 'Backdrop', light: 'Light', prop: 'Prop',
+    flower: 'Flower Decor', other: 'Decor Item',
+  }[String(detection.type || 'other').toLowerCase()] || 'Decor Item'
+  const shapeWord = cap(detection.subtype || detection.shape || '')
+  const bits = [
+    cap(detection.color),
+    shapeWord && !typeName.toLowerCase().includes(shapeWord.toLowerCase()) ? shapeWord : '',
+    typeName,
+    detection.size_inches ? `${detection.size_inches}"` : '',
+  ].filter(Boolean)
+  let name = bits.join(' ').replace(/\s+/g, ' ').trim()
+  const text = String(detection.text_content || detection.character || '').trim()
+  if (text) name += ` "${text}"`
+  return name
 }

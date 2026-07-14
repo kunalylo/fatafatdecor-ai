@@ -29,7 +29,7 @@ app.add_middleware(
 #   POST /analyze-decoration  — fal.ai vision → decoration item list (admin only)
 #
 # Image generation: gpt-image-1 via Emergent proxy (with photo) / fal flux/schnell (no photo)
-# Item selection:   fal-ai/any-llm → google/gemini-flash-1-5
+# Item selection:   fal-ai/any-llm → google/gemini-2.5-flash
 # ============================================================
 
 FAL_KEY        = os.environ.get("FAL_KEY", "")
@@ -503,7 +503,7 @@ async def health():
         "fal_key_configured": bool(FAL_KEY),
         "openai_key_configured": bool(OPENAI_API_KEY),
         "image_model": "gpt-image-1 via OpenAI direct",
-        "selection_model": "gemini-flash-1.5 via fal any-llm",
+        "selection_model": "gemini-2.5-flash via fal any-llm",
         "endpoints": [
             "/smart-generate", "/generate", "/analyze-decoration",
             "/detect-items", "/match-skus", "/generate-tags", "/generate-item-image",
@@ -603,7 +603,7 @@ Respond ONLY with this exact JSON:
             fal_client.run,
             "fal-ai/any-llm",
             arguments={
-                "model": "google/gemini-flash-1.5",
+                "model": "google/gemini-2.5-flash",
                 "system_prompt": selection_system,
                 "prompt": selection_prompt,
             },
@@ -772,7 +772,7 @@ Respond ONLY with valid JSON (no markdown):
             fal_client.run,
             "fal-ai/any-llm",
             arguments={
-                "model": "google/gemini-flash-1.5",
+                "model": "google/gemini-2.5-flash",
                 "system_prompt": system_prompt,
                 "prompt": f"Analyze this decoration image{(' named: ' + req.name) if req.name else ''}. Count ALL items. Use FatafatDecor Indian pricing.",
                 "image_url": image_url,
@@ -856,7 +856,10 @@ Check specifically (zone by zone — ceiling, backdrop, edges, floor, tables, ba
 - balloon clusters in the BACKGROUND or at the EDGES the first pass may have missed
 - any balloon size/color variant not in the list above
 
-Return strict JSON with the SAME item schema as before:
+Return strict JSON with the SAME item schema as before — including the REQUIRED
+"description" (what the item is in THIS photo), "placement" (where it is in the
+scene) and "text_content" (exact words/characters for any letter/number/banner
+item) fields:
 {{"items": [ ... ]}}
 If truly nothing was missed, return {{"items": []}}."""
 
@@ -873,12 +876,14 @@ Return strict JSON:
       "color": "Pink",
       "finish": "Chrome",
       "size_inches": 12,
-      "shape": "round" | "heart" | "star" | "number" | "letter" | "bottle" | "other",
+      "shape": "round" | "heart" | "star" | "number" | "letter" | "bottle" | "butterfly" | "other",
       "character": "5",
-      "subtype": "foil_curtain" | "led_curtain" | "fairy_lights" | "...",
+      "text_content": "HAPPY BIRTHDAY",
+      "subtype": "foil_curtain" | "led_curtain" | "fairy_lights" | "butterfly" | "letter_banner" | "...",
       "quantity": 150,
       "confidence": "high" | "medium" | "low",
-      "notes": "optional description"
+      "description": "REQUIRED — one short sentence: what this exact item is IN THIS PHOTO",
+      "placement": "REQUIRED — where it is in the scene, e.g. 'backdrop center', 'left arch', 'ceiling', 'floor right', 'on table'"
     }
   ],
   "color_palette": ["gold", "silver", "white"],
@@ -890,9 +895,18 @@ Return strict JSON:
 REMEMBER:
 1. A garland visible in image = at least 100-200 balloons total split across sizes.
 2. List EACH size of balloon as a SEPARATE entry (5\", 10\", 12\", 18\").
-3. Big foil shapes (bottles, numbers, letters) = type \"foil_balloon\" + appropriate shape.
+3. Big foil shapes (bottles, numbers, letters, butterflies) = type \"foil_balloon\" + appropriate shape.
 4. Look for backdrops, lights, foil curtains, neon signs, confetti props — list them all.
-5. Round quantities UP, not down."""
+5. Round quantities UP, not down.
+6. TEXT ITEMS: for ANY letters, numbers or words visible (banners, script signs,
+   letter/number balloons) you MUST fill \"text_content\" with the EXACT text as
+   written (e.g. \"HAPPY BIRTHDAY\", \"5\"). A letter banner is ONE entry with
+   quantity = number of letters and text_content = the words. NEVER output a
+   letter/number item without its actual text.
+7. \"description\" and \"placement\" are REQUIRED on EVERY item — a person who
+   cannot see the photo must understand exactly what the item is and where it
+   goes, e.g. description: \"gold cursive foil banner spelling 'Happy Birthday'
+   hung across the fringe curtain\", placement: \"backdrop center\"."""
 
 
 async def _fetch_image_bytes_for_vision(image_url: Optional[str], image_base64: Optional[str]) -> bytes:
@@ -1066,7 +1080,7 @@ Return JSON:
             fal_client.run,
             "fal-ai/any-llm",
             arguments={
-                "model": "google/gemini-flash-1-5",
+                "model": "google/gemini-2.5-flash",
                 "system_prompt": system,
                 "prompt": user,
             },
@@ -1259,7 +1273,10 @@ def _build_item_image_prompt(req: "GenerateItemImageRequest") -> str:
     elif "foil" in cat:
         shape_txt = {"round": "round", "heart": "heart-shaped", "star": "star-shaped",
                      "bottle": "champagne-bottle-shaped", "number": "number-digit-shaped",
-                     "letter": "letter-shaped"}.get(shape, shape)
+                     "letter": "letter-shaped", "butterfly": "butterfly-shaped"}.get(shape)
+        if not shape_txt:
+            # unusual shapes (crown, cake, unicorn…) — use the subcategory name
+            shape_txt = f"{(req.subcategory or shape or 'round').strip()}-shaped"
         subject = f"a single inflated {size}{color} {shape_txt} foil mylar balloon"
     elif "light" in cat:
         subject = f"a coil of {color or 'warm white'} decorative LED fairy string lights"
@@ -1328,7 +1345,7 @@ Return JSON:
             fal_client.run,
             "fal-ai/any-llm",
             arguments={
-                "model": "google/gemini-flash-1-5",
+                "model": "google/gemini-2.5-flash",
                 "system_prompt": system,
                 "prompt": user,
             },
