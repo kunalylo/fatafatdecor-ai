@@ -856,11 +856,24 @@ Check specifically (zone by zone — ceiling, backdrop, edges, floor, tables, ba
 - balloon clusters in the BACKGROUND or at the EDGES the first pass may have missed
 - any balloon size/color variant not in the list above
 
-Return strict JSON with the SAME item schema as before — including the REQUIRED
-"description" (what the item is in THIS photo), "placement" (where it is in the
-scene) and "text_content" (exact words/characters for any letter/number/banner
-item) fields:
-{{"items": [ ... ]}}
+Return strict JSON. EVERY item MUST use exactly this schema — all fields:
+{{
+  "items": [
+    {{
+      "type": "latex_balloon" | "foil_balloon" | "backdrop" | "light" | "prop" | "flower" | "other",
+      "color": "Pink",
+      "finish": "Matte",
+      "size_inches": 12,
+      "shape": "round" | "heart" | "star" | "number" | "letter" | "bottle" | "butterfly" | "other",
+      "text_content": "exact words/characters if the item shows any text, else empty",
+      "subtype": "foil_curtain" | "led_curtain" | "fairy_lights" | "butterfly" | "letter_banner" | "...",
+      "quantity": 20,
+      "confidence": "high" | "medium" | "low",
+      "description": "REQUIRED — one short sentence: what this exact item is in THIS photo",
+      "placement": "REQUIRED — where it is in the scene"
+    }}
+  ]
+}}
 If truly nothing was missed, return {{"items": []}}."""
 
 DETECT_USER_PROMPT = """Analyze this decoration photo VERY thoroughly. Count balloons aggressively.
@@ -1000,8 +1013,18 @@ async def detect_items(req: DetectItemsRequest):
                         str(i.get("finish", "")).lower(), str(i.get("shape", "")).lower(),
                         int(i.get("size_inches") or 0),
                     )
+                def _text(i):
+                    return str(i.get("text_content") or i.get("character") or "").strip().lower()
                 seen = {_key(i) for i in items}
-                added = [i for i in extra if _key(i) not in seen]
+                seen_text = {_text(i) for i in items if _text(i)}
+                added = [
+                    i for i in extra
+                    # drop schema-less junk (no type AND no color = unmatchable)
+                    if (i.get("type") or i.get("color"))
+                    and _key(i) not in seen
+                    # same text = same item (e.g. the 'Happy Birthday' banner found twice)
+                    and (not _text(i) or _text(i) not in seen_text)
+                ]
                 if added:
                     print(f"[detect-items] sweep pass added {len(added)} missed item(s): "
                           + ", ".join(f"{i.get('color','')} {i.get('type','')}" for i in added))

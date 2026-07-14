@@ -282,11 +282,14 @@ async function findBestSkuMatch(db, detection) {
   let match = await callFastAPI('/match-skus', { detection, candidates: slim })
     .catch(() => ({ success: false }))
   if (!match.success || !match.matched_sku_code) {
-    // One retry — fal hiccups are often transient (e.g. bulk image
-    // generation saturating the same provider).
-    await new Promise(r => setTimeout(r, 2000))
-    match = await callFastAPI('/match-skus', { detection, candidates: slim })
-      .catch(() => ({ success: false }))
+    // Retry with backoff — fal rate-limits kick in mid-run when a reference
+    // has many items (and when bulk image generation shares the provider).
+    for (const waitMs of [3000, 12000]) {
+      await new Promise(r => setTimeout(r, waitMs))
+      match = await callFastAPI('/match-skus', { detection, candidates: slim })
+        .catch(() => ({ success: false }))
+      if (match.success && match.matched_sku_code) break
+    }
   }
 
   // Gemini still unavailable — pick deterministically by attributes, but
@@ -384,7 +387,16 @@ async function runReferencePipeline(referenceId) {
     let itemsCostTotal  = 0
     let itemsPriceTotal = 0
 
+    let matchIndex = 0
     for (const det of (detection.items || [])) {
+      // Unmatchable junk (no type and no colour) — usually a malformed AI row.
+      if (!det.type && !det.color) {
+        console.warn('[reference-pipeline] skipping field-less detection:', JSON.stringify(det).slice(0, 120))
+        continue
+      }
+      // Small spacing between Gemini match calls so a long item list doesn't
+      // trip fal's rate limit halfway through.
+      if (matchIndex++ > 0) await new Promise(r => setTimeout(r, 400))
       const match = await findBestSkuMatch(db, det)
       const qty   = Math.max(1, Number(det.quantity) || 1)
 
