@@ -160,6 +160,37 @@ async function syncSkuUsage(db, referenceId, newSkuCodes) {
   }
 }
 
+const reEscape = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * Deterministic pick when Gemini can't choose: colour family first, then
+ * finish, then closest size. Returns null when NO candidate shares the
+ * detected colour — matching a visibly wrong colour (pink→white) is worse
+ * than auto-creating a placeholder SKU.
+ */
+function bestCandidateByAttributes(candidates, detection) {
+  const dc = String(detection.color  || '').toLowerCase().trim()
+  const df = String(detection.finish || '').toLowerCase().trim()
+  const ds = Number(detection.size_inches) || 0
+  const colorFamily = (c) => {
+    if (!dc) return 1                       // nothing detected — anything goes
+    const cc = String(c.color || '').toLowerCase().trim()
+    if (cc === dc) return 2
+    return (cc.includes(dc) || dc.includes(cc)) ? 1 : 0
+  }
+  let best = null, bestScore = -1
+  for (const c of candidates) {
+    const fam = colorFamily(c)
+    if (fam === 0) continue                 // never cross colours
+    let score = fam * 100
+    const cf = String(c.finish || '').toLowerCase().trim()
+    if (df && cf && (cf === df || cf.includes(df) || df.includes(cf))) score += 40
+    if (ds && Number(c.size_inches)) score += Math.max(0, 30 - Math.abs(Number(c.size_inches) - ds) * 5)
+    if (score > bestScore) { bestScore = score; best = c }
+  }
+  return best
+}
+
 // Look up the best SKU candidates for a detected item, then ask Gemini to pick the best match.
 // Specific shapes (bottle / number / letter / heart / star) MUST match a SKU with that
 // shape — otherwise we auto-create. This prevents a "champagne bottle" detection from
@@ -176,8 +207,8 @@ async function findBestSkuMatch(db, detection) {
   else if (type === 'flower')   filter.category = { $regex: 'flower',   $options: 'i' }
   else if (type === 'prop')     filter.category = { $regex: 'prop',     $options: 'i' }
 
-  if (detection.color)  filter.color  = { $regex: `^${detection.color}$`, $options: 'i' }
-  if (detection.finish) filter.finish = { $regex: detection.finish, $options: 'i' }
+  if (detection.color)  filter.color  = { $regex: `^${reEscape(detection.color)}$`, $options: 'i' }
+  if (detection.finish) filter.finish = { $regex: reEscape(detection.finish), $options: 'i' }
   if (detection.size_inches) {
     const s = Number(detection.size_inches)
     filter.size_inches = { $gte: s - 2, $lte: s + 2 }
@@ -200,7 +231,7 @@ async function findBestSkuMatch(db, detection) {
 
   let candidates = await db.collection('master_inventory').find(filter).limit(20).toArray()
 
-  // Widen if no candidates: size first, then finish, then color.
+  // Widen if no candidates: size first, then finish, then colour FAMILY.
   // For specific shapes (bottle/number/letter), never widen colour — better to
   // auto-create than match the wrong item.
   if (candidates.length === 0) {
@@ -209,6 +240,13 @@ async function findBestSkuMatch(db, detection) {
   }
   if (candidates.length === 0) {
     delete filter.finish
+    candidates = await db.collection('master_inventory').find(filter).limit(20).toArray()
+  }
+  if (candidates.length === 0 && !isSpecific && detection.color) {
+    // Colour family: detection "Pink" should reach "Baby Pink"/"Hot Pink"
+    // SKUs (the exact-match regex above is anchored and misses them) —
+    // NOT jump to a completely different colour.
+    filter.color = { $regex: reEscape(detection.color), $options: 'i' }
     candidates = await db.collection('master_inventory').find(filter).limit(20).toArray()
   }
   if (candidates.length === 0 && !isSpecific) {
@@ -239,21 +277,33 @@ async function findBestSkuMatch(db, detection) {
     selling_price_per_unit: c.selling_price_per_unit,
   }))
 
-  const match = await callFastAPI('/match-skus', {
-    detection,
-    candidates: slim,
-  })
-
-  // Gemini service unavailable or threw — fall back to the best candidate
-  // we already found in inventory. Auto-create is a last resort; for common
-  // balloons we'd rather match an existing SKU at "low" confidence than mint
-  // a new one for every Gemini hiccup.
+  let match = await callFastAPI('/match-skus', { detection, candidates: slim })
+    .catch(() => ({ success: false }))
   if (!match.success || !match.matched_sku_code) {
-    const fallback = candidates[0]
+    // One retry — fal hiccups are often transient (e.g. bulk image
+    // generation saturating the same provider).
+    await new Promise(r => setTimeout(r, 2000))
+    match = await callFastAPI('/match-skus', { detection, candidates: slim })
+      .catch(() => ({ success: false }))
+  }
+
+  // Gemini still unavailable — pick deterministically by attributes, but
+  // NEVER cross colours (pink → white ruins the item list). If no candidate
+  // shares the colour, auto-create instead.
+  if (!match.success || !match.matched_sku_code) {
+    const fallback = bestCandidateByAttributes(candidates, detection)
+    if (!fallback) {
+      const created = await autoCreateSku(db, detection)
+      return {
+        sku: created,
+        confidence: 'auto_created',
+        reasoning: 'Gemini unavailable and no same-colour candidate — auto-created',
+      }
+    }
     return {
       sku: fallback,
       confidence: 'low',
-      reasoning: 'Gemini matcher unavailable — picked best candidate by filter',
+      reasoning: `Gemini matcher unavailable — best attribute match (${fallback.color} ${fallback.finish} ${fallback.size_inches}")`,
     }
   }
 
@@ -269,11 +319,20 @@ async function findBestSkuMatch(db, detection) {
         reasoning: 'Gemini returned an invalid SKU code on specific shape — auto-created',
       }
     }
-    // For non-specific shapes, prefer first candidate over auto-create
+    // For non-specific shapes, prefer a colour-safe attribute match over auto-create
+    const fallback = bestCandidateByAttributes(candidates, detection)
+    if (!fallback) {
+      const created = await autoCreateSku(db, detection)
+      return {
+        sku: created,
+        confidence: 'auto_created',
+        reasoning: 'Gemini returned unknown SKU and no same-colour candidate — auto-created',
+      }
+    }
     return {
-      sku: candidates[0],
+      sku: fallback,
       confidence: 'low',
-      reasoning: 'Gemini returned unknown SKU — picked first candidate',
+      reasoning: 'Gemini returned unknown SKU — best attribute match',
     }
   }
 
