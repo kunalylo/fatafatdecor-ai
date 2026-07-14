@@ -1271,8 +1271,9 @@ def _build_item_image_prompt(req: "GenerateItemImageRequest") -> str:
 
     return (
         f"Professional e-commerce product photograph of {subject}, centered on a seamless "
-        "clean white studio background, soft even studio lighting, subtle soft shadow, "
-        "high detail, photorealistic. No text, no watermark, no logo, no people, no hands, "
+        "light gray studio background, soft even studio lighting, subtle soft shadow, "
+        "high detail, photorealistic. The product must stand out clearly against the "
+        "background. No text, no watermark, no logo, no people, no hands, "
         "no other objects — the product only."
     )
 
