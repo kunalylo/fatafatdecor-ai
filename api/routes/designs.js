@@ -130,6 +130,9 @@ router.post('/designs/generate', requireUser, asyncRoute(async (req, res, ok, er
             unit_price:       i.unit_price || 0,
             line_price:       i.line_price || 0,
             is_removable:     false,   // legacy clients can't re-price removals
+            description:      i.description || '',
+            placement:        i.placement || '',
+            text_content:     i.text_content || '',
           }))
           // Legacy display items — old apps compute the grand total as Σ(items), so
           // include a fees+GST line to make that sum equal the real customer total.
@@ -438,6 +441,11 @@ router.post('/designs/generate-from-reference', requireUser, asyncRoute(async (r
     unit_price:       i.unit_price || 0,        // 2x customer-facing price
     line_price:       i.line_price || 0,
     is_removable:     !!i.is_removable,
+    // What the item is in the reference photo + where it goes — the decorator
+    // recreates the look from these.
+    description:      i.description || '',
+    placement:        i.placement || '',
+    text_content:     i.text_content || '',
   }))
   const breakdown = customerBreakdown(picked.base_price)
 

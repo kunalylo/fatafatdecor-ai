@@ -584,6 +584,28 @@ router.get('/dp/order-detail/:id', requireDp, asyncRoute(async (req, res, ok, er
         item_image_url: i.matched_sku_code ? (imgBySku[i.matched_sku_code] || null) : null,
       }))
     }
+
+    // Backfill description/placement from the reference for orders whose
+    // item snapshots predate those fields — the decorator needs to know what
+    // each item is in the reference photo and where it goes.
+    const needsDesc = cleanOrder.items.some(i => !i.description)
+    if (needsDesc && design?.reference_design_id) {
+      const refDoc = await db.collection('reference_designs').findOne(
+        { id: design.reference_design_id },
+        { projection: { detected_items: 1 } },
+      )
+      if (refDoc?.detected_items?.length) {
+        const pool = [...refDoc.detected_items]
+        cleanOrder.items = cleanOrder.items.map(it => {
+          if (it.description) return it
+          let idx = pool.findIndex(r => r.matched_sku_code === it.matched_sku_code && (r.quantity || 1) === (it.quantity || 1))
+          if (idx < 0) idx = pool.findIndex(r => r.matched_sku_code === it.matched_sku_code)
+          if (idx < 0) return it
+          const [r] = pool.splice(idx, 1)
+          return { ...it, description: r.description || '', placement: r.placement || '', text_content: it.text_content || r.text_content || '' }
+        })
+      }
+    }
   }
 
   return ok({ ...cleanOrder, customer: safeUser, decorated_image: design?.decorated_image || null, kit_name: design?.kit_name || null, kit_id: design?.kit_id || null, kit_info: kitInfo, kit_items: design?.kit_items || [], addon_items: design?.addon_items || [] })
