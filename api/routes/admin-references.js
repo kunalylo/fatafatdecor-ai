@@ -262,6 +262,31 @@ async function findBestSkuMatch(db, detection) {
     candidates = await db.collection('master_inventory').find(filter).limit(20).toArray()
   }
 
+  // Subtype guard: a detection with a specific subtype (foil_curtain,
+  // fairy_lights, neon_sign, letter_banner…) must NOT settle for the closest
+  // same-category SKU — a fringe curtain is not a "mini round backdrop unit".
+  // If no candidate actually matches the subtype keyword, auto-create the item.
+  const SUBTYPE_STOPWORDS = new Set(['foil', 'led', 'mylar', 'mini', 'unit', 'balloon', 'balloons', 'light', 'lights', 'up', 'decor', 'other'])
+  const subtypeTokens = String(detection.subtype || '')
+    .toLowerCase().split(/[_\s/-]+/)
+    .filter(t => t.length > 2 && !SUBTYPE_STOPWORDS.has(t))
+  if (subtypeTokens.length > 0 && candidates.length > 0) {
+    const subtypeMatches = candidates.filter(c => {
+      const hay = `${c.subcategory || ''} ${c.sku_code || ''} ${c.shape || ''} ${c.category || ''} ${c.display_name || ''}`.toLowerCase()
+      return subtypeTokens.some(t => hay.includes(t))
+    })
+    if (subtypeMatches.length > 0) {
+      candidates = subtypeMatches
+    } else {
+      const created = await autoCreateSku(db, detection)
+      return {
+        sku: created,
+        confidence: 'auto_created',
+        reasoning: `No SKU matches subtype "${detection.subtype}" — auto-created ${created.sku_code}`,
+      }
+    }
+  }
+
   if (candidates.length === 0) {
     // No inventory match — auto-create a placeholder SKU
     const created = await autoCreateSku(db, detection)
@@ -639,6 +664,63 @@ router.post('/admin/references/:id/rerun', asyncRoute(async (req, res, ok, err) 
   )
   runReferencePipeline(req.params.id).catch(e => console.error('[pipeline bg]', e))
   return ok({ id: req.params.id, status: 'processing' })
+}))
+
+// POST /admin/references/:id/items/:index/create-sku — one-click: turn a
+// weak/substituted detected item into a real auto-created SKU (with proper
+// name, description and AI image) and rewire the reference row to it.
+router.post('/admin/references/:id/items/:index/create-sku', asyncRoute(async (req, res, ok, err) => {
+  const db  = await connectToMongo()
+  const ref = await db.collection('reference_designs').findOne({ id: req.params.id })
+  if (!ref) return err('Reference not found', 404)
+  const items = ref.detected_items || []
+  const idx = Number(req.params.index)
+  if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) return err('Invalid item index', 400)
+
+  const item = items[idx]
+  const raw  = item.raw || {}
+  const detection = {
+    type:         raw.type    || 'other',
+    color:        raw.color   || '',
+    finish:       raw.finish  || '',
+    shape:        raw.shape   || '',
+    subtype:      raw.subtype || '',
+    size_inches:  Number(raw.size_inches) || 0,
+    description:  item.description || raw.description || '',
+    text_content: item.text_content || raw.text_content || '',
+  }
+  const created = await autoCreateSku(db, detection)
+  const qty = Math.max(1, Number(item.quantity) || 1)
+  const skuName = (created.display_name || created.sku_code)
+    + (item.text_content && !(created.display_name || '').includes(`"${item.text_content}"`) ? ` "${item.text_content}"` : '')
+
+  items[idx] = {
+    ...item,
+    matched_sku_code: created.sku_code,
+    matched_sku_id:   created.id,
+    sku_name:         skuName,
+    category:         created.category,
+    unit_cost:        created.per_unit_cost || 0,
+    unit_price:       created.selling_price_per_unit || 0,
+    line_cost:        qty * (created.per_unit_cost || 0),
+    line_price:       qty * (created.selling_price_per_unit || 0),
+    confidence:       'auto_created',
+    reasoning:        'Created by admin from this reference item',
+  }
+  const itemsCostTotal  = items.reduce((s, i) => s + (i.line_cost  || 0), 0)
+  const itemsPriceTotal = items.reduce((s, i) => s + (i.line_price || 0), 0)
+  await db.collection('reference_designs').updateOne(
+    { id: ref.id },
+    { $set: {
+      detected_items:    items,
+      items_cost_total:  Math.round(itemsCostTotal * 100) / 100,
+      items_price_total: Math.round(itemsPriceTotal * 100) / 100,
+      items_gap:         Math.max(0, Math.round(((ref.base_price || 0) - itemsPriceTotal) * 100) / 100),
+      updated_at: new Date(),
+    }},
+  )
+  await syncSkuUsage(db, ref.id, items.map(i => i.matched_sku_code).filter(Boolean))
+  return ok({ item: items[idx], sku: { sku_code: created.sku_code, display_name: created.display_name || '', image_url: created.image_url || null } })
 }))
 
 // GET /admin/references — list with filters
