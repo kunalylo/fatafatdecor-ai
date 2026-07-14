@@ -43,9 +43,9 @@ async function uploadToImageKit(buffer, filename) {
   }
 }
 
-async function callFastAPI(endpoint, body) {
+async function callFastAPI(endpoint, body, timeoutMs = 120000) {
   const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 120000)
+  const t = setTimeout(() => ctrl.abort(), timeoutMs)
   try {
     const res = await fetch(`${AI_SERVICE_URL}${endpoint}`, {
       method: 'POST',
@@ -363,9 +363,9 @@ async function runReferencePipeline(referenceId) {
   if (!ref) return
 
   try {
-    // 1. Detect items with gpt-4o vision
-    const detection = await callFastAPI('/detect-items', { image_url: ref.image_url })
-    if (!detection.success) throw new Error('Vision detection failed: ' + (detection.error || 'unknown'))
+    // 1. Detect items with gpt-4o vision (two passes — needs more than the default timeout)
+    const detection = await callFastAPI('/detect-items', { image_url: ref.image_url }, 240000)
+    if (!detection.success) throw new Error('Vision detection failed: ' + (detection.error || detection.detail || 'unknown'))
 
     if (detection.is_screenshot) {
       await db.collection('reference_designs').updateOne(
