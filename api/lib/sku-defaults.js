@@ -85,6 +85,12 @@ export function estimateUnitCost(detection) {
   const type    = String(detection.type || 'other').toLowerCase()
   const subtype = String(detection.subtype || '').toLowerCase().replace(/[\s-]+/g, '_')
 
+  // The vision model estimates each item's real cost from the photo (it can see
+  // the actual size/quality), which beats any static table. Trust it when sane;
+  // the tables below remain the fallback. Admin can refine in All Items.
+  const est = Number(detection.est_unit_cost_inr) || 0
+  if (est >= 1 && est <= 12000) return Math.round(est * 100) / 100
+
   // Mirror balls price by diameter, not by the latex size curve.
   if (type === 'mirror_ball') return MIRROR_BALL_COST(detection.size_inches)
 

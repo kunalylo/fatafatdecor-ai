@@ -96,7 +96,7 @@ async function autoCreateSku(db, detection) {
       detection.type === 'mirror_ball'  ? 'PVC Mirror (reusable)' :
       detection.type === 'structure'    ? 'Reusable structure' :
       detection.type === 'latex_balloon' ? 'Latex' : 'Other',
-    is_reusable: ['mirror_ball', 'structure'].includes(detection.type),
+    is_reusable: detection.is_rental_structure === true || ['mirror_ball', 'structure'].includes(detection.type),
     finish: String(detection.finish || ''),
     shape: String(detection.shape || ''),
     size_inches: Number(detection.size_inches) || 0,
@@ -384,12 +384,19 @@ async function findBestSkuMatch(db, detection) {
   // shares the colour, auto-create instead.
   if (!match.success || !match.matched_sku_code) {
     const fallback = bestCandidateByAttributes(candidates, detection)
-    if (!fallback) {
+    // Same price-sanity rule as the matched path — a blind fallback must never
+    // hand a premium item to a cheap balloon SKU.
+    const fbEst  = Number(detection.est_unit_cost_inr) || 0
+    const fbCost = Number(fallback?.per_unit_cost) || 0
+    const fbOff  = fbEst > 0 && fbCost > 0 && Math.max(fbEst / fbCost, fbCost / fbEst) > 5
+    if (!fallback || fbOff) {
       const created = await autoCreateSku(db, detection)
       return {
         sku: created,
         confidence: 'auto_created',
-        reasoning: 'Gemini unavailable and no same-colour candidate — auto-created',
+        reasoning: fbOff
+          ? `Gemini unavailable and the closest SKU is ~${Math.round(Math.max(fbEst / fbCost, fbCost / fbEst))}x off this item's value — auto-created`
+          : 'Gemini unavailable and no same-colour candidate — auto-created',
       }
     }
     return {
@@ -436,6 +443,25 @@ async function findBestSkuMatch(db, detection) {
       sku: created,
       confidence: 'auto_created',
       reasoning: `Low-confidence match for specific shape (${shape}) — auto-created instead`,
+    }
+  }
+
+  // ── Price-sanity guard ──────────────────────────────────────────────
+  // The single most robust catch-all: if the vision model says this item costs
+  // ~Rs 2,600 and the matched SKU costs Rs 7, the match is wrong no matter how
+  // well colour/size/shape line up (this is how Rs 4,000 mirror balls became
+  // "Silver Chrome Latex 12\""). Auto-create the real item instead.
+  const estCost = Number(detection.est_unit_cost_inr) || 0
+  const skuCost = Number(matchedSku.per_unit_cost) || 0
+  if (estCost > 0 && skuCost > 0) {
+    const ratio = Math.max(estCost / skuCost, skuCost / estCost)
+    if (ratio > 5) {
+      const created = await autoCreateSku(db, detection)
+      return {
+        sku: created,
+        confidence: 'auto_created',
+        reasoning: `Matched SKU ${matchedSku.sku_code} costs Rs ${skuCost} but this item is worth ~Rs ${estCost} (${Math.round(ratio)}x off) — auto-created the real item`,
+      }
     }
   }
 

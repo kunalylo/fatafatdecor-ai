@@ -822,16 +822,15 @@ DETECT_SYSTEM_PROMPT = (
     "PREMIUM ITEMS ARE THE MOST EXPENSIVE PART OF A DESIGN — never skip them and never\n"
     "collapse them into balloons. A design costing tens of thousands of rupees is\n"
     "expensive BECAUSE of mirror balls, shimmer walls, frames and plinths.\n\n"
-    "COUNTING RULES (be aggressive — undercounting is the #1 mistake):\n"
-    "• A balloon garland or arch typically contains 100-300 balloons.\n"
-    "• A small visible cluster of balloons = at least 20-30 balloons.\n"
-    "• A medium cluster (covers ~half a wall) = 50-100 balloons.\n"
-    "• A large/dense cluster (covers a whole wall or full garland) = 150-300+ balloons.\n"
-    "• Balloon walls covering an entire wall = 200-500 balloons.\n"
-    "• ALWAYS round UP for clusters — if you think 40, say 60. If 100, say 150.\n"
-    "• Split a multi-color cluster into separate entries by color+size+finish.\n"
-    "• Within a single garland, balloons come in MULTIPLE sizes (5\", 10\", 12\", 18\") —\n"
-    "  list each size as a separate entry with its own estimated quantity.\n\n"
+    "COUNTING — COUNT, DO NOT GUESS:\n"
+    "• Decompose each garland/cluster into the clusters you can actually SEE, estimate\n"
+    "  each, then sum. A typical 10-14ft organic garland is 120-190 balloons total\n"
+    "  ACROSS ALL sizes and colours; a 4ft accent cluster is 15-30.\n"
+    "• NEVER emit round-number recipes (50/50/50, 100x, 150x, 200x) — a round number\n"
+    "  means you guessed. Give the honest count you can justify from the image.\n"
+    "• A count must be physically possible in the space shown. If 200 spheres cannot\n"
+    "  fit in the frame, do not write 200.\n"
+    "• Split every cluster into separate entries by colour × size × finish.\n\n"
     "SHAPE DISTINCTION (critical):\n"
     "• 'number' = digit 0-9 (record character e.g. '5')\n"
     "• 'letter' = A-Z (record character)\n"
@@ -875,19 +874,55 @@ DETECT_SYSTEM_PROMPT = (
     "items: also check for lights (fairy/LED/neon signs), drapes/curtains/net fabric, "
     "flowers (real or artificial), foil fringe curtains, banners, streamers, table "
     "decor, candles, lanterns, stands/arch frames, welcome boards and floor props.\n\n"
-    "BALLOON SIZE CALIBRATION (standard sizes: 5, 10, 12, 18, 24, 36 inches):\n"
-    "• 5\" = small filler (fist-sized) · 10-12\" = standard (human-head-sized)\n"
-    "• 18\" = large (~1.5× a head) · 24\" = very large (2× a standard balloon)\n"
-    "• 36\" = GIANT statement balloon (torso-sized or bigger)\n"
-    "• Compare every balloon to the STANDARD balloons around it: if its diameter is\n"
-    "  clearly 2-3× theirs, it is 24\" or 36\" — NEVER tag oversized statement\n"
-    "  balloons as 12\" or 18\". Premium designs often feature giant 24\"/36\" balloons.\n"
-    "• mirror_ball sizes run larger: 24\", 36\", 48\", 60\". A mirror ball as tall as a\n"
-    "  person's torso is 48-60\". Use furniture/people/doors in the photo as the ruler.\n\n"
-    "SPLIT GARLANDS PROPERLY — one entry per (size × colour × finish) combination.\n"
-    "A single garland with light-blue AND teal balloons in 5/10/12/18/24\" is up to TEN\n"
-    "entries, not one. Never merge different colours or sizes into a single row, and\n"
-    "never report an entire garland as one size.\n\n"
+    "THE SPHERE TEST — apply to EVERY silver/chrome round object before labelling it:\n"
+    "(a) Can you read the ROOM in it — ceiling grid, windows, deck chairs, the\n"
+    "    photographer — as a SHARP MIRRORED IMAGE? → type \"mirror_ball\". Rigid\n"
+    "    inflatable PVC, seamless, perfectly round, NO neck, NO knot, 24-60\".\n"
+    "(b) Soft satin sheen, visible neck/knot, slight pear shape, blurry highlight\n"
+    "    rather than a reflected scene, ≤36\"? → \"latex_balloon\" + finish Chrome.\n"
+    "(c) Pole-to-pole gore seams and heat-seal tabs, welded mylar panels, 16/24/32/40\"?\n"
+    "    → \"foil_balloon\" + subtype \"orbz\".\n"
+    "(d) Faceted grid of small square mirror tiles, hard sphere, 6-16\"? → \"prop\" +\n"
+    "    subtype \"disco_ball\".\n"
+    "(e) Flat and DIGIT-shaped mylar? → \"foil_balloon\" + shape \"number\". This is the\n"
+    "    ONLY thing that may ever be called a number foil.\n"
+    "If a sphere is ≥24\" and mirrors the room it is NEVER latex, NEVER a number foil\n"
+    "and NEVER a round foil — no matter what the inventory contains.\n\n"
+    "SIZE CALIBRATION — anchor to a real object, never default:\n"
+    "• Before writing size_inches, find a reference in frame and name it in size_note.\n"
+    "  Anchors: door 80\" tall / 32\" wide · adult 65\" · hall ceiling 108-144\" ·\n"
+    "  floor tile 24\" · pool coping 4-6\" · deck lounger 72\" · EXIT sign 12\".\n"
+    "• Latex ladder: 5/8/10/12/18/24/36 only. NEVER emit 16\" for a latex balloon.\n"
+    "• mirror_ball: 12/18/24/36/48/60/72 · orbz: 16/24/32/40 · bobo: 18/24/36.\n"
+    "• Structures: give size in FEET in the description (e.g. '12ft x 9ft').\n"
+    "• If you are about to write the SAME size for every balloon, stop — you have not\n"
+    "  calibrated. A real garland always mixes sizes.\n\n"
+    "OTHER LOOK-ALIKES:\n"
+    "• SHIMMER/SEQUIN WALL = rigid flat panel with a regular GRID of pivoting discs,\n"
+    "  hard straight edges, no gaps → structure/shimmer_wall (size in ft, count the\n"
+    "  ~2ft-wide panels). A FOIL FRINGE CURTAIN = limp vertical strips with visible\n"
+    "  gaps you can see through → backdrop/foil_curtain. They are not the same item.\n"
+    "• INFLATABLE PILLOW/PANEL WALL = grid of puffy air-sealed quilted cells with weld\n"
+    "  seams → structure/panel_wall. It is an OBJECT, not a background texture — it is\n"
+    "  usually the single most expensive item in the photo. Never skip it.\n"
+    "• BOBO/BUBBLE = clear rigid sphere, thick rim/neck collar, refracts like glass,\n"
+    "  18-36\" → foil_balloon/bobo_bubble. Clear LATEX is limp, soft-edged, ≤18\".\n"
+    "• LIGHTS: continuous glowing tube bent into words → light/neon_sign (fill text).\n"
+    "  The same tube run along an edge/floor/doorway with NO text → light/led_strip\n"
+    "  (a SEPARATE item from any sign). Even glow with no visible source → light/\n"
+    "  led_strip (say 'inferred'). Fairy lights ONLY when you can SEE discrete point\n"
+    "  bulbs on a wire — never just because the scene glows.\n\n"
+    "STRUCTURE HUNT — ask 'what is holding this up?' before you finish:\n"
+    "• A cake/sign/prop above floor level → a plinth or platform under it.\n"
+    "• A cube balanced on a corner → a hidden support.\n"
+    "• A balloon column over ~5ft → a pole + weighted base.\n"
+    "• Backdrop artwork → a frame or stand behind it (frame and printed panel are TWO\n"
+    "  items). Ceiling-hung items → anchors + line.\n"
+    "Emit these as their own structure rows even when concealed, noting 'inferred'.\n"
+    "Never emit a hovering object with no support.\n\n"
+    "LETTER CUBES/BLOCKS: ONE ROW PER CUBE, quantity 1, with that cube's single glyph\n"
+    "in text_content and its own placement. Read each glyph independently — never let a\n"
+    "familiar word (LOVE, ONE, BABY) override the letters actually shown.\n\n"
     "NEON/LED SIGNS vs FOIL SHAPES (do not confuse):\n"
     "• Glowing outline text or numbers = type 'light', subtype 'neon_sign' — NOT a\n"
     "  foil number/letter balloon.\n"
@@ -955,8 +990,11 @@ Return strict JSON:
       "character": "5",
       "text_content": "HAPPY BIRTHDAY",
       "subtype": "foil_curtain" | "led_curtain" | "fairy_lights" | "neon_sign" | "led_strip" | "shimmer_wall" | "panel_wall" | "plinth" | "platform" | "frame" | "arch_frame" | "letter_cube" | "inflatable_number" | "orbz" | "bobo_bubble" | "disco_ball" | "balloon_column" | "...",
-      "quantity": 150,
+      "quantity": 37,
       "confidence": "high" | "medium" | "low",
+      "est_unit_cost_inr": 2600,
+      "is_rental_structure": false,
+      "size_note": "REQUIRED — the reference object you used to judge size, e.g. 'compared to the 80-inch doorway behind it'",
       "description": "REQUIRED — one short sentence: what this exact item is IN THIS PHOTO",
       "placement": "REQUIRED — where it is in the scene, e.g. 'backdrop center', 'left arch', 'ceiling', 'floor right', 'on table'"
     }
@@ -978,6 +1016,14 @@ REMEMBER:
    BACKDROP FRAMES, PLINTHS/PEDESTALS/PLATFORMS, GIANT INFLATABLE NUMBERS AND LETTER
    CUBES = type \"structure\" with the matching subtype. These premium pieces carry most
    of a design's cost — listing them is MANDATORY.
+6b. est_unit_cost_inr is REQUIRED on every item: your honest Indian trade cost for ONE
+   unit (for reusable structures, the per-event rental). Rough anchors: 5\" latex ~Rs 2,
+   12\" latex ~Rs 4, 18\" latex ~Rs 17, 36\" latex ~Rs 90, foil number ~Rs 120,
+   orbz ~Rs 130, bobo ~Rs 60, 24\" mirror ball ~Rs 1500, 36\" ~Rs 2600, 48\" ~Rs 4200,
+   60\" ~Rs 6000, shimmer wall panel ~Rs 5000, inflatable panel wall ~Rs 5500,
+   plinth ~Rs 1200, backdrop frame ~Rs 2000, neon sign ~Rs 2500, LED strip run ~Rs 600.
+   Set is_rental_structure true for reusable assets (mirror balls, walls, frames,
+   plinths, signs); false for consumables (balloons, streamers, printed panels).
 6. TEXT ITEMS: for ANY letters, numbers or words visible (banners, script signs,
    letter/number balloons) you MUST fill \"text_content\" with the EXACT text as
    written (e.g. \"HAPPY BIRTHDAY\", \"5\"). A letter banner is ONE entry with
