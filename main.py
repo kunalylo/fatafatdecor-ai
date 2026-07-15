@@ -1016,14 +1016,21 @@ REMEMBER:
    BACKDROP FRAMES, PLINTHS/PEDESTALS/PLATFORMS, GIANT INFLATABLE NUMBERS AND LETTER
    CUBES = type \"structure\" with the matching subtype. These premium pieces carry most
    of a design's cost — listing them is MANDATORY.
-6b. est_unit_cost_inr is REQUIRED on every item: your honest Indian trade cost for ONE
-   unit (for reusable structures, the per-event rental). Rough anchors: 5\" latex ~Rs 2,
-   12\" latex ~Rs 4, 18\" latex ~Rs 17, 36\" latex ~Rs 90, foil number ~Rs 120,
-   orbz ~Rs 130, bobo ~Rs 60, 24\" mirror ball ~Rs 1500, 36\" ~Rs 2600, 48\" ~Rs 4200,
-   60\" ~Rs 6000, shimmer wall panel ~Rs 5000, inflatable panel wall ~Rs 5500,
-   plinth ~Rs 1200, backdrop frame ~Rs 2000, neon sign ~Rs 2500, LED strip run ~Rs 600.
-   Set is_rental_structure true for reusable assets (mirror balls, walls, frames,
-   plinths, signs); false for consumables (balloons, streamers, printed panels).
+6b. est_unit_cost_inr is REQUIRED on every item — what ONE unit costs the decorator
+   for ONE event, in Indian rupees:
+   • CONSUMABLES (balloons, streamers, custom prints) = purchase cost.
+     5\" latex ~Rs 2 · 12\" latex ~Rs 4 · 18\" latex ~Rs 17 · 36\" latex ~Rs 90 ·
+     foil number ~Rs 120 · orbz ~Rs 130 · bobo ~Rs 60 · custom printed panel ~Rs 1500.
+   • REUSABLE ASSETS (mirror balls, walls, frames, plinths, signs) = the PER-EVENT
+     RENTAL value, NOT the purchase price — the decorator owns these and reuses them
+     on every job. Anchors: mirror ball 24\" ~Rs 260 · 36\" ~Rs 480 · 48\" ~Rs 750 ·
+     60\" ~Rs 1100 · shimmer wall panel ~Rs 1200 · whole inflatable panel wall
+     ~Rs 5500 · plinth ~Rs 400 · backdrop frame ~Rs 800 · letter cube ~Rs 500 ·
+     giant inflatable number ~Rs 1200 · neon sign ~Rs 2200 · LED strip run ~Rs 600 ·
+     disco ball ~Rs 300.
+   Never quote the purchase price of a reusable asset — a Rs 33,000 design cannot
+   contain Rs 100,000 of mirror balls.
+   Set is_rental_structure true for reusable assets; false for consumables.
 6. TEXT ITEMS: for ANY letters, numbers or words visible (banners, script signs,
    letter/number balloons) you MUST fill \"text_content\" with the EXACT text as
    written (e.g. \"HAPPY BIRTHDAY\", \"5\"). A letter banner is ONE entry with

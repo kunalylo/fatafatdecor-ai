@@ -2,11 +2,16 @@
 // Used to auto-create a master_inventory SKU on the fly. Admin can edit the
 // cost later — these are educated guesses based on category + size.
 
+// COST BASIS: what ONE unit costs US for ONE event.
+//   • consumables (balloons, streamers, printed panels) = purchase cost
+//   • reusable assets (mirror balls, walls, frames, plinths) = PER-EVENT RENTAL
+//     value, NOT the purchase price — we own them and reuse them across jobs.
+// Using purchase prices here made a Rs 33,000 design show Rs 113,000 of "materials".
 const BASE_COST_BY_TYPE = {
   latex_balloon:  3,    // per 12" balloon, typical wholesale ~Rs 1-5
   foil_balloon:   50,   // mylar shapes typical ~Rs 30-200
-  mirror_ball:    1800, // inflatable PVC chrome sphere — reusable premium prop
-  structure:      2500, // shimmer wall panel / frame / plinth / panel wall
+  mirror_ball:    480,  // per-event rental of an inflatable chrome sphere
+  structure:      900,  // per-event rental of a wall panel / frame / plinth
   backdrop:       250,  // foil curtains / net backdrops ~Rs 100-500
   light:          200,  // led curtain / fairy lights
   prop:           150,  // misc props (signs, frames)
@@ -14,45 +19,50 @@ const BASE_COST_BY_TYPE = {
   other:          50,
 }
 
-// Per-unit costs for premium subtypes (Indian market, reusable rental value).
-// These items carry most of a premium design's cost — the generic type default
-// (a Rs 150 "prop") made Rs 40,000 designs look like they used Rs 600 of material.
+// Per-event cost for premium subtypes (Indian market). Reusable items are priced
+// at rental value; consumable/custom items at purchase.
 const SUBTYPE_COST = {
-  shimmer_wall:      5000,
-  sequin_wall:       5000,
-  sequin_panel:      5000,
-  panel_wall:        4500,
-  pillow_wall:       4500,
-  frame:             2000,
-  backdrop_frame:    2000,
-  arch_frame:        2500,
-  plinth:            1200,
-  pedestal:          1200,
-  platform:          1500,
-  cylinder_stand:    1200,
-  letter_cube:       1500,
-  letter_blocks:     1500,
-  inflatable_number: 3000,
-  inflatable_letter: 3000,
-  neon_sign:         2500,
+  shimmer_wall:      1200,   // per ~2ft x 8ft panel, per event
+  sequin_wall:       1200,
+  sequin_panel:      1200,
+  panel_wall:        5500,   // whole inflatable pillow/panel wall (~12ft x 9ft)
+  pillow_wall:       5500,
+  frame:             800,
+  backdrop_frame:    800,
+  arch_frame:        900,
+  plinth:            400,
+  pedestal:          400,
+  platform:          500,
+  cylinder_stand:    400,
+  letter_cube:       500,
+  letter_blocks:     500,
+  inflatable_number: 1200,
+  inflatable_letter: 1200,
+  custom_printed_panel: 1500,  // consumable — made per event
+  neon_sign:         2200,
   led_strip:         600,
+  neon_flex_rope:    1300,
   led_curtain:       800,
   fairy_lights:      250,
   spotlight:         500,
-  disco_ball:        700,
+  disco_ball:        300,
   balloon_column:    400,
+  floor_covering:    1800,
+  rigging:           700,
   bobo_bubble:       60,
   orbz:              120,
 }
 
-// mirror_ball cost scales steeply with diameter (inflatable PVC chrome spheres)
+// Inflatable chrome sphere — PER-EVENT RENTAL by diameter (not purchase price).
 const MIRROR_BALL_COST = (sizeInches) => {
   const s = Number(sizeInches) || 24
-  if (s <= 16) return 900
-  if (s <= 24) return 1500
-  if (s <= 36) return 2600
-  if (s <= 48) return 4200
-  return 6000
+  if (s <= 12) return 120
+  if (s <= 18) return 180
+  if (s <= 24) return 260
+  if (s <= 36) return 480
+  if (s <= 48) return 750
+  if (s <= 60) return 1100
+  return 1500
 }
 
 const SIZE_MULTIPLIER = (sizeInches) => {
