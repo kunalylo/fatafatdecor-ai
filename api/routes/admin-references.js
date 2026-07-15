@@ -88,9 +88,32 @@ async function autoCreateSku(db, detection) {
   const sell = Math.round(cost * 2 * 100) / 100
   const sku_code = buildAutoSkuCode(detection)
 
-  // Try to upsert — if another reference already triggered the same SKU, reuse it
+  // Reuse an existing auto-created SKU — but REFRESH its cost if the current
+  // model disagrees materially. Auto-SKUs minted by older cost models keep their
+  // stale price forever otherwise, and the price-sanity guard just loops back
+  // here and hands the same wrong SKU straight back (a Rs 400/letter banner on
+  // a Rs 3,400 design). Admin-reviewed SKUs are never touched.
   const existing = await db.collection('master_inventory').findOne({ sku_code })
-  if (existing) return existing
+  if (existing) {
+    const stale = Number(existing.per_unit_cost) || 0
+    const isAuto = existing.auto_created === true && existing.cost_reviewed !== true
+    if (isAuto && stale > 0 && cost > 0) {
+      const ratio = Math.max(stale / cost, cost / stale)
+      if (ratio >= 2) {
+        await db.collection('master_inventory').updateOne(
+          { id: existing.id },
+          { $set: {
+            per_unit_cost: cost, cost_price_pack: cost,
+            selling_price_per_unit: sell, selling_price_pack: sell,
+            cost_refreshed_at: new Date(), updated_at: new Date(),
+          }},
+        )
+        console.log(`[auto-sku] refreshed stale cost ${sku_code}: Rs ${stale} -> Rs ${cost}`)
+        return { ...existing, per_unit_cost: cost, selling_price_per_unit: sell }
+      }
+    }
+    return existing
+  }
 
   const doc = {
     id: uuidv4(),
