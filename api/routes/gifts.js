@@ -245,7 +245,9 @@ router.get('/dp/gift-order-detail/:id', requireDp, asyncRoute(async (req, res, o
     giftOrder.delivery_person_id === dpId
   if (!isAssigned) return err('Not authorized for this gift order', 403)
   const customer  = await db.collection('users').findOne({ id: giftOrder.user_id })
-  const { _id: _g1, ...cleanGiftOrder } = giftOrder
+  // Never send the recipient's confirmation OTP to the decorator — they must get it
+  // from the recipient in person at hand-over.
+  const { _id: _g1, verification_otp: _g4, otp_generated_at: _g5, ...cleanGiftOrder } = giftOrder
   const { _id: _g2, password: _g3, ...safeCustomer } = customer || {}
   return ok({ ...cleanGiftOrder, customer: safeCustomer })
 }))

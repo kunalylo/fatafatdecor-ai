@@ -63,6 +63,27 @@ async function assertDpOwnsOrder(db, orderId, dpId, res) {
   return order
 }
 
+// ── DP response sanitizers ─────────────────────────────────────
+// Never send the customer's verification OTP to the decorator app (they must get it
+// from the customer in person), and never send the base64 selfie proof back down —
+// an in-progress order otherwise carries ~300KB of base64 into EVERY 15s dashboard
+// poll on the phone, which is the single biggest source of app lag.
+function dpSafeOrder(o) {
+  const { _id, verification_otp, otp_generated_at, selfie_proof, face_scan, ...rest } = o
+  // keep a lightweight marker so UIs can still show "check-in done"
+  if (selfie_proof || face_scan) rest.selfie_proof_done = true
+  return rest
+}
+// List/card variant: also drop the heavy arrays that only the detail screen needs.
+// Cards render at most: first 3 item NAMES, gift thumbnails, slot, address, status,
+// collect-amount, schedule_conflict — everything else is dead weight on every poll.
+function dpListOrder(o) {
+  const { items, kit_items, addon_items, completion_photos, gift_items, ...rest } = dpSafeOrder(o)
+  if (Array.isArray(items)) rest.items = items.map(i => ({ name: i.name }))
+  if (Array.isArray(gift_items)) rest.gift_items = gift_items.map(g => ({ name: g.name, image_url: g.image_url, quantity: g.quantity }))
+  return rest
+}
+
 // POST /dp/login — issues JWT
 router.post('/dp/login', asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
@@ -168,7 +189,7 @@ router.get('/dp/dashboard/:id', requireDp, asyncRoute(async (req, res, ok, err) 
   // disable Accept and explain why (double-booking: each job needs a 30m+2h+30m clear block).
   const commitments = await decoratorCommitments(db, dpId)
   const withConflict = (o, kind) => ({ ...o, schedule_conflict: conflictDescriptor(scheduleConflictAgainst(commitments, o.delivery_slot, kind, o.id)) })
-  return ok({ delivery_person: safeDp, today_orders: todayOrders.map(({ _id, ...o }) => o), active_orders: allActiveOrders.map(({ _id, ...o }) => o), pending_orders: pendingOrders.map(({ _id, ...o }) => withConflict(o, 'decoration')), pending_gift_orders: pendingGiftOrders.map(({ _id, ...o }) => withConflict(o, 'gift')), active_gift_orders: activeGiftOrders.map(({ _id, ...o }) => o), date: today })
+  return ok({ delivery_person: safeDp, today_orders: todayOrders.map(dpListOrder), active_orders: allActiveOrders.map(dpListOrder), pending_orders: pendingOrders.map(o => withConflict(dpListOrder(o), 'decoration')), pending_gift_orders: pendingGiftOrders.map(o => withConflict(dpListOrder(o), 'gift')), active_gift_orders: activeGiftOrders.map(dpListOrder), date: today })
 }))
 
 // GET /dp/calendar/:id
@@ -181,7 +202,7 @@ router.get('/dp/calendar/:id', requireDp, asyncRoute(async (req, res, ok, err) =
   const dp    = await db.collection('delivery_persons').findOne({ id: dpId })
   if (!dp) return err('Delivery person not found', 404)
   const orders = await db.collection('orders').find({ $or: [{ accepted_decorators: dpId }, { delivery_person_id: dpId }], 'delivery_slot.date': { $regex: `^${month}` } }).sort({ 'delivery_slot.date': 1, 'delivery_slot.hour': 1 }).toArray()
-  return ok({ month, schedule: dp.schedule || {}, orders: orders.map(({ _id, ...o }) => o) })
+  return ok({ month, schedule: dp.schedule || {}, orders: orders.map(dpListOrder) })
 }))
 
 // GET /dp/orders/:id
@@ -192,7 +213,7 @@ router.get('/dp/orders/:id', requireDp, asyncRoute(async (req, res, ok, err) => 
   const query = { $or: [{ accepted_decorators: dpId }, { delivery_person_id: dpId }] }
   if (req.query.status) query.delivery_status = req.query.status
   const orders = await db.collection('orders').find(query).sort({ created_at: -1 }).toArray()
-  return ok(orders.map(({ _id, ...o }) => o))
+  return ok(orders.map(dpListOrder))
 }))
 
 // POST /dp/generate-otp
@@ -567,7 +588,7 @@ router.get('/dp/order-detail/:id', requireDp, asyncRoute(async (req, res, ok, er
     if (kit) { const { _id, reference_images, ...kitData } = kit; kitInfo = kitData }
   }
   const { _id: _1, password: _2, ...safeUser }   = user || {}
-  const { _id: _3,               ...cleanOrder } = order
+  const cleanOrder = dpSafeOrder(order)
 
   // Enrich procurement items with their SKU's product image — the decorator
   // should see WHAT each item looks like, not decode SKU codes.
