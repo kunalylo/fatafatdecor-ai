@@ -171,11 +171,16 @@ const reEscape = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  * design's "Happy Birthday" sign.
  */
 function textCompatible(candidate, detection) {
+  const detText = String(detection.text_content || detection.character || '').trim().toLowerCase()
   const m = /"([^"]+)"/.exec(String(candidate.display_name || ''))
   const candText = m ? m[1].trim().toLowerCase() : ''
-  if (!candText) return true   // generic SKU — compatible with anything
-  const detText = String(detection.text_content || detection.character || '').trim().toLowerCase()
-  return !!detText && candText === detText
+  if (candText) return !!detText && candText === detText
+  // Character-shaped SKUs (number/letter foils) also require the detection to
+  // carry a character — otherwise giant plain orbs with no digits on them get
+  // matched to "Silver Number Foil 32\"" just because the size+colour fit.
+  const candShapeTxt = `${candidate.shape || ''} ${candidate.subcategory || ''} ${candidate.sku_code || ''}`.toLowerCase()
+  if (/number|letter/.test(candShapeTxt)) return !!detText
+  return true
 }
 
 /**
