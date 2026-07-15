@@ -849,7 +849,9 @@ DETECT_SYSTEM_PROMPT = (
     "• Report each piece of visible text exactly ONCE — never list the same words or\n"
     "  digits as both a sign AND a balloon.\n"
     "• Only report number/letter BALLOONS when an inflated balloon shaped like that\n"
-    "  character is clearly visible.\n\n"
+    "  character is clearly visible — and ALWAYS fill text_content with the character.\n"
+    "• Giant plain metallic spheres/orbs with no character on them are ROUND balloons\n"
+    "  (shape 'round', usually 24\"/36\") — never numbers or letters.\n\n"
     "NEVER skip an item type that is clearly visible. Look at the image multiple times."
 )
 

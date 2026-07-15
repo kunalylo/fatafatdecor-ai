@@ -64,6 +64,11 @@ export function estimateUnitCost(detection) {
 export function buildAutoSkuCode(detection) {
   const shapeSeg = String(detection.subtype || detection.shape || '')
     .toUpperCase().replace(/[\s_]+/g, '')
+  // Text-bearing items (signs, banners, number/letter sets) must get DISTINCT
+  // SKUs per text — otherwise the '13' neon and the 'Happy Birthday' neon
+  // collide on one code and the second one inherits the first one's identity.
+  const textSeg = String(detection.text_content || detection.character || '')
+    .toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 14)
   const parts = [
     'FD-AUTO',
     String(detection.type || 'other').toUpperCase().replace(/_/g, ''),
@@ -71,6 +76,7 @@ export function buildAutoSkuCode(detection) {
     String(detection.color || 'X').toUpperCase().replace(/\s+/g, ''),
     String(detection.size_inches || 0) + 'IN',
     String(detection.finish || 'X').toUpperCase().replace(/\s+/g, ''),
+    textSeg ? 'TXT' + textSeg : null,
   ].filter(Boolean)
   // Sanitize: alphanumeric + hyphens only
   return parts.join('-').replace(/[^A-Z0-9-]/g, '').slice(0, 80)

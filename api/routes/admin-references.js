@@ -454,6 +454,12 @@ async function runReferencePipeline(referenceId) {
         console.warn('[reference-pipeline] skipping field-less detection:', JSON.stringify(det).slice(0, 120))
         continue
       }
+      // A number/letter balloon with NO readable character is a hallucination
+      // signature (usually giant plain spheres misread as digits) — treat as round.
+      if (['number', 'letter'].includes(String(det.shape || '').toLowerCase())
+          && !String(det.text_content || det.character || '').trim()) {
+        det.shape = 'round'
+      }
       // Small spacing between Gemini match calls so a long item list doesn't
       // trip fal's rate limit halfway through.
       if (matchIndex++ > 0) await new Promise(r => setTimeout(r, 400))
