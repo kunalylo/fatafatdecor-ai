@@ -545,8 +545,40 @@ async function runReferencePipeline(referenceId) {
     let itemsCostTotal  = 0
     let itemsPriceTotal = 0
 
+    // ── Tier + unit guards (deterministic — prompts alone don't hold) ──
+    const basePriceForTier = Number(ref.base_price) || 0
+    const CHEAP = basePriceForTier > 0 && basePriceForTier < 8000
+
     let matchIndex = 0
     for (const det of (detection.items || [])) {
+      const detName = `${det.subtype || ''} ${det.description || ''}`.toLowerCase()
+
+      // A banner/garland sold as ONE set must not be multiplied by its letters:
+      // the model prices the set (~Rs 400) but reports quantity = 13 letters.
+      const looksLikeSet = /banner|bunting|garland_set|letter_string|light_up_letters/.test(detName)
+        || (/letter|number/.test(detName) && /banner|string|bunting/.test(detName))
+      if (looksLikeSet && String(det.text_content || '').trim().length > 2 && Number(det.quantity) > 3) {
+        console.log(`[reference-pipeline] banner set "${det.text_content}" qty ${det.quantity} -> 1 set`)
+        det.quantity = 1
+      }
+
+      // A sub-Rs 8,000 design is balloons + cheap accents. It does not contain
+      // inflatable mirror balls, shimmer/panel walls or plinths — those cost more
+      // than the whole job. Drop them rather than ship impossible economics.
+      if (CHEAP && ['mirror_ball', 'structure'].includes(det.type)) {
+        const isCheapStructure = /letter_cube|letter_block/.test(detName)
+        if (!isCheapStructure) {
+          console.log(`[reference-pipeline] tier guard: dropped ${det.type}/${det.subtype || ''} from a Rs ${basePriceForTier} design`)
+          continue
+        }
+      }
+      // Likewise a custom neon sign (~Rs 2,200) in a cheap design is really a
+      // party-shop light-up letter banner.
+      if (CHEAP && det.type === 'light' && /neon/.test(detName)) {
+        det.subtype = 'light_up_letters'
+        det.est_unit_cost_inr = 400
+        det.quantity = 1
+      }
       // Unmatchable junk (no type and no colour) — usually a malformed AI row.
       if (!det.type && !det.color) {
         console.warn('[reference-pipeline] skipping field-less detection:', JSON.stringify(det).slice(0, 120))
