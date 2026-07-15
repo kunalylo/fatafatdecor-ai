@@ -577,6 +577,37 @@ async function runReferencePipeline(referenceId) {
       }
     }
 
+    // 2b. Merge duplicate rows — pass 1 and the sweep sometimes both emit the
+    // same physical item (same SKU, same text). Sum quantities into one row.
+    {
+      const merged = []
+      const rowIdx = new Map()
+      for (const it of detectedItems) {
+        const key = `${it.matched_sku_code || it.sku_name}|${(it.text_content || '').toLowerCase()}`
+        if (rowIdx.has(key)) {
+          const m = merged[rowIdx.get(key)]
+          m.quantity   += it.quantity
+          m.line_cost  += it.line_cost
+          m.line_price += it.line_price
+          // keep the better confidence label
+          const rank = { high: 3, medium: 2, low: 1, auto_created: 2 }
+          if ((rank[it.confidence] || 0) > (rank[m.confidence] || 0)) m.confidence = it.confidence
+        } else {
+          rowIdx.set(key, merged.length)
+          merged.push({ ...it })
+        }
+      }
+      if (merged.length < detectedItems.length) {
+        console.log(`[reference-pipeline] merged ${detectedItems.length - merged.length} duplicate row(s)`)
+        detectedItems.length = 0
+        detectedItems.push(...merged)
+      }
+    }
+
+    // 2c. Recompute totals after the merge
+    itemsCostTotal  = detectedItems.reduce((s, i) => s + (i.line_cost  || 0), 0)
+    itemsPriceTotal = detectedItems.reduce((s, i) => s + (i.line_price || 0), 0)
+
     // 3. Pricing: new model — base_price is the decoration & material total at 2x.
     //    Customer pays base_price + setup_transport + platform + convenience + GST 18%.
     const basePrice = Number(ref.base_price) || 0
