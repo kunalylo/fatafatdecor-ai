@@ -165,6 +165,20 @@ async function syncSkuUsage(db, referenceId, newSkuCodes) {
 const reEscape = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
+ * Text-bearing SKUs (display_name contains "…") may only match a detection
+ * carrying the SAME text. A 'Gold Letter Light "TIL DEATH DO US PARTY!"'
+ * auto-created from one reference must never be picked for a different
+ * design's "Happy Birthday" sign.
+ */
+function textCompatible(candidate, detection) {
+  const m = /"([^"]+)"/.exec(String(candidate.display_name || ''))
+  const candText = m ? m[1].trim().toLowerCase() : ''
+  if (!candText) return true   // generic SKU — compatible with anything
+  const detText = String(detection.text_content || detection.character || '').trim().toLowerCase()
+  return !!detText && candText === detText
+}
+
+/**
  * Deterministic pick when Gemini can't choose: colour family first, then
  * finish, then closest size. Returns null when NO candidate shares the
  * detected colour — matching a visibly wrong colour (pink→white) is worse
@@ -285,6 +299,21 @@ async function findBestSkuMatch(db, detection) {
         reasoning: `No SKU matches subtype "${detection.subtype}" — auto-created ${created.sku_code}`,
       }
     }
+  }
+
+  // Text guard: drop candidates whose display_name carries DIFFERENT text than
+  // the detection. If that empties the pool, auto-create the right-text item.
+  if (candidates.length > 0) {
+    const textOk = candidates.filter(c => textCompatible(c, detection))
+    if (textOk.length === 0) {
+      const created = await autoCreateSku(db, detection)
+      return {
+        sku: created,
+        confidence: 'auto_created',
+        reasoning: `Only text-specific SKUs with different text matched — auto-created ${created.sku_code}`,
+      }
+    }
+    candidates = textOk
   }
 
   if (candidates.length === 0) {
