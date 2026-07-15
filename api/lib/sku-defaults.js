@@ -39,6 +39,11 @@ const SUBTYPE_COST = {
   inflatable_number: 1200,
   inflatable_letter: 1200,
   custom_printed_panel: 1500,  // consumable — made per event
+  // Letter/number BANNER sets are quoted per letter: a "HAPPY BIRTHDAY" foil
+  // banner is ~Rs 250 for the set, not 13 separate Rs 75 props.
+  letter_banner:     20,
+  letter_garland:    20,
+  number_banner:     20,
   neon_sign:         2200,
   led_strip:         600,
   neon_flex_rope:    1300,
@@ -76,6 +81,19 @@ const SIZE_MULTIPLIER = (sizeInches) => {
   return 20.0
 }
 
+// Foil/mylar barely scales with size the way latex does — an 18" round foil is
+// ~Rs 45, not Rs 125. Keep foil growth gentle so big foils don't dominate a
+// cheap design's cost (this is only the fallback; the vision estimate wins).
+const FOIL_SIZE_MULTIPLIER = (sizeInches) => {
+  const s = Number(sizeInches) || 18
+  if (s <= 16) return 0.8
+  if (s <= 18) return 1.0
+  if (s <= 24) return 1.6
+  if (s <= 32) return 2.4
+  if (s <= 40) return 3.2
+  return 4.0
+}
+
 // Foil character (number/letter) multiplier — they cost more than plain shapes
 const FOIL_SHAPE_MULTIPLIER = {
   number: 4,
@@ -111,12 +129,13 @@ export function estimateUnitCost(detection) {
   const base = BASE_COST_BY_TYPE[type] ?? BASE_COST_BY_TYPE.other
 
   let cost = base
-  // Structures are priced per unit, not scaled by a balloon size curve.
-  if (type !== 'structure') cost *= SIZE_MULTIPLIER(detection.size_inches)
-
   if (type === 'foil_balloon') {
+    cost *= FOIL_SIZE_MULTIPLIER(detection.size_inches)
     const shape = String(detection.shape || 'other').toLowerCase()
     cost *= FOIL_SHAPE_MULTIPLIER[shape] ?? 1.0
+  } else if (type !== 'structure') {
+    // Structures are priced per unit, not scaled by a balloon size curve.
+    cost *= SIZE_MULTIPLIER(detection.size_inches)
   }
 
   // Clamp to reasonable bounds (premium structures may legitimately be costly)
