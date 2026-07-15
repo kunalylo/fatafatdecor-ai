@@ -156,6 +156,11 @@ router.post('/admin/inventory/items', asyncRoute(async (req, res, ok, err) => {
     sku_code:        String(b.sku_code).trim(),
     category:        String(b.category || '').trim(),
     subcategory:     String(b.subcategory || '').trim(),
+    // Human name shown in item lists / decorator checklists. Without this the
+    // reference pipeline falls back to a blank sku_name for premium items.
+    display_name:    String(b.display_name || '').trim(),
+    description:     String(b.description || '').trim(),
+    is_reusable:     b.is_reusable === true,
     brand_supplier:  String(b.brand_supplier || '').trim(),
     material:        String(b.material || '').trim(),
     finish:          String(b.finish || '').trim(),

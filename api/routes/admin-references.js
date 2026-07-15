@@ -65,7 +65,25 @@ async function callFastAPI(endpoint, body, timeoutMs = 120000) {
  * Create a placeholder master_inventory SKU for a detected item with no inventory match.
  * Cost is estimated from category + size. Admin can refine later.
  */
+/**
+ * Normalise the detected subtype before it drives naming and cost.
+ * The vision model reliably SEES a sequin/shimmer wall but often labels it
+ * "panel_wall" — a 4.5x cost error (Rs 1,200 shimmer panel vs Rs 5,500
+ * inflatable pillow wall). Trust the words it wrote in the description.
+ */
+function normalizeSubtype(detection) {
+  const sub  = String(detection.subtype || '').toLowerCase()
+  const text = `${sub} ${detection.description || ''}`.toLowerCase()
+  if (/sequin|shimmer|disc|glitter wall/.test(text) && /wall|panel|backdrop/.test(text)) return 'shimmer_wall'
+  if (/pillow|quilted|inflatable (panel|cube)/.test(text)) return 'panel_wall'
+  if (/plinth|pedestal|cylinder/.test(text)) return 'plinth'
+  if (/platform|riser|stage/.test(text)) return 'platform'
+  if (/fringe|foil curtain|tinsel curtain/.test(text)) return 'foil_curtain'
+  return sub
+}
+
 async function autoCreateSku(db, detection) {
+  detection = { ...detection, subtype: normalizeSubtype(detection) || detection.subtype }
   const cost = estimateUnitCost(detection)
   const sell = Math.round(cost * 2 * 100) / 100
   const sku_code = buildAutoSkuCode(detection)
@@ -529,10 +547,15 @@ async function runReferencePipeline(referenceId) {
 
         // Customer-visible name: auto-created SKUs carry a human display_name;
         // otherwise build from SKU attrs (no underscores, no 0" suffix).
-        let skuName = match.sku.display_name
+        let skuName = String(match.sku.display_name || '').trim()
           || [match.sku.color, String(match.sku.subcategory || '').replace(/_/g, ' '), match.sku.size_inches ? `${match.sku.size_inches}"` : ''].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim()
+          || match.sku.sku_code   // never leave a row nameless
         const textContent = String(det.text_content || det.character || '').trim()
-        if (textContent && !skuName.includes(`"${textContent}"`)) skuName += ` "${textContent}"`
+        // Case-insensitive check — display_name already carrying «Happy Birthday»
+        // must not gain a second «HAPPY BIRTHDAY».
+        if (textContent && !skuName.toLowerCase().includes(`"${textContent.toLowerCase()}"`)) {
+          skuName += ` "${textContent}"`
+        }
 
         detectedItems.push({
           raw_detection:    `${qty}x ${det.color || ''} ${det.finish || ''} ${det.type || ''}${det.size_inches ? ` ${det.size_inches}"` : ''}`.replace(/\s+/g, ' ').trim(),
@@ -582,8 +605,15 @@ async function runReferencePipeline(referenceId) {
     {
       const merged = []
       const rowIdx = new Map()
+      // Key on the NORMALISED human name, not the SKU code: the same physical
+      // object often gets two rows via different types (a plinth detected once
+      // as `structure` and once as `prop` mints two SKUs — still one plinth).
+      const nameKey = (it) => String(it.sku_name || '')
+        .toLowerCase()
+        .replace(/\b(structure|prop|decor item|light|backdrop)\b/g, '')
+        .replace(/[^a-z0-9]+/g, '')
       for (const it of detectedItems) {
-        const key = `${it.matched_sku_code || it.sku_name}|${(it.text_content || '').toLowerCase()}`
+        const key = `${nameKey(it) || it.matched_sku_code}|${(it.text_content || '').toLowerCase()}`
         if (rowIdx.has(key)) {
           const m = merged[rowIdx.get(key)]
           m.quantity   += it.quantity
