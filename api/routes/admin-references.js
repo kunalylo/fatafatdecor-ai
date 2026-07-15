@@ -80,6 +80,8 @@ async function autoCreateSku(db, detection) {
     category:
       detection.type === 'latex_balloon' ? 'Latex Balloons' :
       detection.type === 'foil_balloon'  ? 'Foil Balloons'  :
+      detection.type === 'mirror_ball'   ? 'Mirror Balls' :
+      detection.type === 'structure'     ? 'Structures' :
       detection.type === 'backdrop'      ? 'Foil Balloon Backdrop Units' :
       detection.type === 'light'         ? 'Lights' :
       detection.type === 'flower'        ? 'Flowers' :
@@ -89,7 +91,12 @@ async function autoCreateSku(db, detection) {
     display_name: buildAutoDisplayName(detection),
     description: String(detection.description || ''),
     brand_supplier: 'AUTO-CREATED — review and assign supplier',
-    material: detection.type === 'foil_balloon' ? 'Foil/Mylar' : 'Latex/Other',
+    material:
+      detection.type === 'foil_balloon' ? 'Foil/Mylar' :
+      detection.type === 'mirror_ball'  ? 'PVC Mirror (reusable)' :
+      detection.type === 'structure'    ? 'Reusable structure' :
+      detection.type === 'latex_balloon' ? 'Latex' : 'Other',
+    is_reusable: ['mirror_ball', 'structure'].includes(detection.type),
     finish: String(detection.finish || ''),
     shape: String(detection.shape || ''),
     size_inches: Number(detection.size_inches) || 0,
@@ -229,10 +236,19 @@ async function findBestSkuMatch(db, detection) {
 
   if (type === 'latex_balloon') filter.category = 'Latex Balloons'
   else if (type === 'foil_balloon') filter.category = 'Foil Balloons'
+  else if (type === 'mirror_ball') filter.category = { $regex: 'mirror ball', $options: 'i' }
+  else if (type === 'structure') filter.category = { $regex: 'structure', $options: 'i' }
   else if (type === 'backdrop') filter.category = { $regex: 'backdrop', $options: 'i' }
   else if (type === 'light')    filter.category = { $regex: 'light',    $options: 'i' }
   else if (type === 'flower')   filter.category = { $regex: 'flower',   $options: 'i' }
   else if (type === 'prop')     filter.category = { $regex: 'prop',     $options: 'i' }
+  else filter.category = { $nin: ['Latex Balloons', 'Foil Balloons'] }   // unknown type must not fall into balloons
+
+  // HARD TYPE GUARD: non-balloon items must never be satisfied by a balloon SKU.
+  // Inventory is ~99% balloons, so without this a Rs 4,000 chrome mirror ball
+  // silently becomes "Silver Chrome Latex 12\"" purely on colour+finish+size.
+  const NON_BALLOON = ['mirror_ball', 'structure', 'backdrop', 'light', 'prop', 'flower', 'other']
+  const isNonBalloon = NON_BALLOON.includes(type)
 
   if (detection.color)  filter.color  = { $regex: `^${reEscape(detection.color)}$`, $options: 'i' }
   if (detection.finish) filter.finish = { $regex: reEscape(detection.finish), $options: 'i' }
@@ -279,6 +295,12 @@ async function findBestSkuMatch(db, detection) {
   if (candidates.length === 0 && !isSpecific) {
     delete filter.color
     candidates = await db.collection('master_inventory').find(filter).limit(20).toArray()
+  }
+
+  // Safety net for the type guard: even after the widening steps above, a
+  // non-balloon detection must never keep a latex/foil balloon SKU.
+  if (isNonBalloon && candidates.length > 0) {
+    candidates = candidates.filter(c => !/^(Latex Balloons|Foil Balloons)$/i.test(String(c.category || '')))
   }
 
   // Subtype guard: a detection with a specific subtype (foil_curtain,
@@ -435,12 +457,14 @@ async function runReferencePipeline(referenceId) {
     const detection = await callFastAPI('/detect-items', { image_url: ref.image_url }, 240000)
     if (!detection.success) throw new Error('Vision detection failed: ' + (detection.error || detection.detail || 'unknown'))
 
-    if (detection.is_screenshot) {
+    if (detection.is_screenshot || detection.is_marketing_graphic) {
       await db.collection('reference_designs').updateOne(
         { id: referenceId },
         { $set: {
           status: 'rejected',
-          rejection_reason: 'Image appears to be a screenshot, not a real decoration photo',
+          rejection_reason: detection.is_marketing_graphic
+            ? 'Image is a marketing graphic / collage / render (overlaid title text), not a photo of a real decoration setup. Upload the real job photo instead.'
+            : 'Image appears to be a screenshot, not a real decoration photo',
           updated_at: new Date(),
         }},
       )

@@ -5,11 +5,54 @@
 const BASE_COST_BY_TYPE = {
   latex_balloon:  3,    // per 12" balloon, typical wholesale ~Rs 1-5
   foil_balloon:   50,   // mylar shapes typical ~Rs 30-200
+  mirror_ball:    1800, // inflatable PVC chrome sphere — reusable premium prop
+  structure:      2500, // shimmer wall panel / frame / plinth / panel wall
   backdrop:       250,  // foil curtains / net backdrops ~Rs 100-500
   light:          200,  // led curtain / fairy lights
   prop:           150,  // misc props (signs, frames)
   flower:         80,
   other:          50,
+}
+
+// Per-unit costs for premium subtypes (Indian market, reusable rental value).
+// These items carry most of a premium design's cost — the generic type default
+// (a Rs 150 "prop") made Rs 40,000 designs look like they used Rs 600 of material.
+const SUBTYPE_COST = {
+  shimmer_wall:      5000,
+  sequin_wall:       5000,
+  sequin_panel:      5000,
+  panel_wall:        4500,
+  pillow_wall:       4500,
+  frame:             2000,
+  backdrop_frame:    2000,
+  arch_frame:        2500,
+  plinth:            1200,
+  pedestal:          1200,
+  platform:          1500,
+  cylinder_stand:    1200,
+  letter_cube:       1500,
+  letter_blocks:     1500,
+  inflatable_number: 3000,
+  inflatable_letter: 3000,
+  neon_sign:         2500,
+  led_strip:         600,
+  led_curtain:       800,
+  fairy_lights:      250,
+  spotlight:         500,
+  disco_ball:        700,
+  balloon_column:    400,
+  bobo_bubble:       60,
+  orbz:              120,
+}
+
+// mirror_ball cost scales steeply with diameter (inflatable PVC chrome spheres)
+const MIRROR_BALL_COST = (sizeInches) => {
+  const s = Number(sizeInches) || 24
+  if (s <= 16) return 900
+  if (s <= 24) return 1500
+  if (s <= 36) return 2600
+  if (s <= 48) return 4200
+  return 6000
 }
 
 const SIZE_MULTIPLIER = (sizeInches) => {
@@ -39,19 +82,30 @@ const FOIL_SHAPE_MULTIPLIER = {
  * Tuned for Indian decor wholesale market.
  */
 export function estimateUnitCost(detection) {
-  const type = String(detection.type || 'other').toLowerCase()
+  const type    = String(detection.type || 'other').toLowerCase()
+  const subtype = String(detection.subtype || '').toLowerCase().replace(/[\s-]+/g, '_')
+
+  // Mirror balls price by diameter, not by the latex size curve.
+  if (type === 'mirror_ball') return MIRROR_BALL_COST(detection.size_inches)
+
+  // Known premium subtype → flat realistic cost (no size multiplier: a shimmer
+  // wall panel costs the same whether or not a size was estimated).
+  if (SUBTYPE_COST[subtype] !== undefined) return SUBTYPE_COST[subtype]
+
   const base = BASE_COST_BY_TYPE[type] ?? BASE_COST_BY_TYPE.other
 
   let cost = base
-  cost *= SIZE_MULTIPLIER(detection.size_inches)
+  // Structures are priced per unit, not scaled by a balloon size curve.
+  if (type !== 'structure') cost *= SIZE_MULTIPLIER(detection.size_inches)
 
   if (type === 'foil_balloon') {
     const shape = String(detection.shape || 'other').toLowerCase()
     cost *= FOIL_SHAPE_MULTIPLIER[shape] ?? 1.0
   }
 
-  // Clamp to reasonable bounds
-  cost = Math.max(1, Math.min(cost, 3000))
+  // Clamp to reasonable bounds (premium structures may legitimately be costly)
+  const ceiling = ['structure', 'mirror_ball'].includes(type) ? 12000 : 3000
+  cost = Math.max(1, Math.min(cost, ceiling))
   return Math.round(cost * 100) / 100
 }
 
@@ -91,6 +145,7 @@ export function buildAutoDisplayName(detection) {
     .replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())
   const typeName = {
     latex_balloon: 'Latex Balloon', foil_balloon: 'Foil Balloon',
+    mirror_ball: 'Inflatable Mirror Ball', structure: 'Structure',
     backdrop: 'Backdrop', light: 'Light', prop: 'Prop',
     flower: 'Flower Decor', other: 'Decor Item',
   }[String(detection.type || 'other').toLowerCase()] || 'Decor Item'

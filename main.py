@@ -802,6 +802,26 @@ DETECT_SYSTEM_PROMPT = (
     "Look at the decoration photo and identify EVERY visible balloon, foil, prop, "
     "backdrop, light and decorative item — be GENEROUS with counts, not conservative. "
     "Decoration photos typically have HUNDREDS of balloons, not dozens.\n\n"
+    "ITEM TYPE VOCABULARY (choose the RIGHT type — this drives purchasing):\n"
+    "• latex_balloon — ordinary rubber balloons (matte/chrome/pastel/confetti), 5-36\".\n"
+    "• foil_balloon  — mylar/foil: numbers, letters, hearts, stars, orbz/4D, shapes.\n"
+    "• mirror_ball   — GIANT INFLATABLE CHROME MIRROR SPHERE (24-60\"): rigid-looking\n"
+    "  PVC ball with a true mirror finish that REFLECTS THE ROOM/PEOPLE like a mirror.\n"
+    "  These are premium reusable props costing thousands of rupees — they are NOT\n"
+    "  latex balloons and NOT number foils. If you see big silver spheres mirroring\n"
+    "  the surroundings (hanging, on the floor, in a pool, on a wall), they are\n"
+    "  mirror_ball. NEVER label them latex_balloon or foil_balloon.\n"
+    "• structure     — reusable built elements: shimmer/sequin wall panels, inflatable\n"
+    "  panel/pillow walls, backdrop frames, arch frames, plinths/pedestals/platforms,\n"
+    "  cylinder stands, giant inflatable numbers/letters, letter cubes/blocks.\n"
+    "• backdrop      — soft backdrop surfaces: foil fringe curtains, drapes, fabric, net.\n"
+    "• light         — fairy/string lights, LED strips, neon signs, spotlights.\n"
+    "• prop          — loose decor: disco balls, rugs, furniture, cake stands, floats.\n"
+    "• flower        — real or artificial florals, foliage, pampas.\n"
+    "• other         — anything genuinely none of the above.\n\n"
+    "PREMIUM ITEMS ARE THE MOST EXPENSIVE PART OF A DESIGN — never skip them and never\n"
+    "collapse them into balloons. A design costing tens of thousands of rupees is\n"
+    "expensive BECAUSE of mirror balls, shimmer walls, frames and plinths.\n\n"
     "COUNTING RULES (be aggressive — undercounting is the #1 mistake):\n"
     "• A balloon garland or arch typically contains 100-300 balloons.\n"
     "• A small visible cluster of balloons = at least 20-30 balloons.\n"
@@ -831,6 +851,14 @@ DETECT_SYSTEM_PROMPT = (
     "• Holographic = iridescent rainbow shimmer\n\n"
     "COLOR: use specific names — White, Ivory, Cream, Champagne Gold, Gold, Rose Gold, "
     "Silver, Black, Pink, Hot Pink, Baby Pink, Red, Maroon, Blue, Navy, Pastel Blue, etc.\n\n"
+    "GRAPHICS AND OVERLAID TEXT (critical):\n"
+    "• Set is_marketing_graphic=true if the image is a Pinterest/blog/marketing graphic,\n"
+    "  a multi-photo collage, an AI-generated render, or a stock promo with a big\n"
+    "  overlaid TITLE banner (e.g. 'Creative Pool Party Decorations').\n"
+    "• NEVER turn overlaid titles, captions, watermarks, logos, brand marks, exit/safety\n"
+    "  signs or reflections into decoration items. Only report text that is PHYSICALLY\n"
+    "  part of the decor (a neon sign on the wall, letters on a balloon, a printed\n"
+    "  backdrop panel that is part of the setup).\n\n"
     "SCAN THE WHOLE IMAGE ZONE BY ZONE before answering — ceiling, backdrop wall, "
     "left edge, right edge, floor, tables, background. Balloons are never the only "
     "items: also check for lights (fairy/LED/neon signs), drapes/curtains/net fabric, "
@@ -842,7 +870,13 @@ DETECT_SYSTEM_PROMPT = (
     "• 36\" = GIANT statement balloon (torso-sized or bigger)\n"
     "• Compare every balloon to the STANDARD balloons around it: if its diameter is\n"
     "  clearly 2-3× theirs, it is 24\" or 36\" — NEVER tag oversized statement\n"
-    "  balloons as 12\" or 18\". Premium designs often feature giant 24\"/36\" balloons.\n\n"
+    "  balloons as 12\" or 18\". Premium designs often feature giant 24\"/36\" balloons.\n"
+    "• mirror_ball sizes run larger: 24\", 36\", 48\", 60\". A mirror ball as tall as a\n"
+    "  person's torso is 48-60\". Use furniture/people/doors in the photo as the ruler.\n\n"
+    "SPLIT GARLANDS PROPERLY — one entry per (size × colour × finish) combination.\n"
+    "A single garland with light-blue AND teal balloons in 5/10/12/18/24\" is up to TEN\n"
+    "entries, not one. Never merge different colours or sizes into a single row, and\n"
+    "never report an entire garland as one size.\n\n"
     "NEON/LED SIGNS vs FOIL SHAPES (do not confuse):\n"
     "• Glowing outline text or numbers = type 'light', subtype 'neon_sign' — NOT a\n"
     "  foil number/letter balloon.\n"
@@ -898,17 +932,18 @@ Return strict JSON:
 
 {
   "is_screenshot": false,
+  "is_marketing_graphic": false,
   "is_decoration_photo": true,
   "items": [
     {
-      "type": "latex_balloon" | "foil_balloon" | "backdrop" | "light" | "prop" | "flower" | "other",
+      "type": "latex_balloon" | "foil_balloon" | "mirror_ball" | "structure" | "backdrop" | "light" | "prop" | "flower" | "other",
       "color": "Pink",
       "finish": "Chrome",
       "size_inches": 12,
       "shape": "round" | "heart" | "star" | "number" | "letter" | "bottle" | "butterfly" | "other",
       "character": "5",
       "text_content": "HAPPY BIRTHDAY",
-      "subtype": "foil_curtain" | "led_curtain" | "fairy_lights" | "butterfly" | "letter_banner" | "...",
+      "subtype": "foil_curtain" | "led_curtain" | "fairy_lights" | "neon_sign" | "led_strip" | "shimmer_wall" | "panel_wall" | "plinth" | "platform" | "frame" | "arch_frame" | "letter_cube" | "inflatable_number" | "orbz" | "bobo_bubble" | "disco_ball" | "balloon_column" | "...",
       "quantity": 150,
       "confidence": "high" | "medium" | "low",
       "description": "REQUIRED — one short sentence: what this exact item is IN THIS PHOTO",
@@ -923,10 +958,15 @@ Return strict JSON:
 
 REMEMBER:
 1. A garland visible in image = at least 100-200 balloons total split across sizes.
-2. List EACH size of balloon as a SEPARATE entry (5\", 10\", 12\", 18\").
+2. List EACH size of balloon as a SEPARATE entry (5\", 10\", 12\", 18\"), and split by colour too.
 3. Big foil shapes (bottles, numbers, letters, butterflies) = type \"foil_balloon\" + appropriate shape.
 4. Look for backdrops, lights, foil curtains, neon signs, confetti props — list them all.
 5. Round quantities UP, not down.
+5b. GIANT CHROME SPHERES THAT MIRROR THE ROOM = type \"mirror_ball\" (24-60\"), never
+   latex_balloon / number foil. SHIMMER OR SEQUIN WALL PANELS, INFLATABLE PANEL WALLS,
+   BACKDROP FRAMES, PLINTHS/PEDESTALS/PLATFORMS, GIANT INFLATABLE NUMBERS AND LETTER
+   CUBES = type \"structure\" with the matching subtype. These premium pieces carry most
+   of a design's cost — listing them is MANDATORY.
 6. TEXT ITEMS: for ANY letters, numbers or words visible (banners, script signs,
    letter/number balloons) you MUST fill \"text_content\" with the EXACT text as
    written (e.g. \"HAPPY BIRTHDAY\", \"5\"). A letter banner is ONE entry with
@@ -1051,6 +1091,7 @@ async def detect_items(req: DetectItemsRequest):
         return {
             "success": True,
             "is_screenshot":     parsed.get("is_screenshot", False),
+            "is_marketing_graphic": parsed.get("is_marketing_graphic", False),
             "is_decoration_photo": parsed.get("is_decoration_photo", True),
             "items":              items,
             "color_palette":      parsed.get("color_palette", []),
@@ -1305,7 +1346,24 @@ def _build_item_image_prompt(req: "GenerateItemImageRequest") -> str:
     size   = f'{int(req.size_inches)}-inch ' if req.size_inches else ""
     cat    = (req.category or "").lower()
 
-    if "latex" in cat or ("balloon" in cat and "foil" not in cat and "backdrop" not in cat):
+    if "mirror ball" in cat:
+        subject = (f"a single giant {size}{color or 'silver'} inflatable chrome mirror ball — "
+                   "a perfectly round mirror-finish sphere with a reflective metallic surface")
+    elif "structure" in cat:
+        sub = (req.subcategory or "").lower().replace("_", " ").strip()
+        struct = {
+            "shimmer wall": "a shimmer sequin wall panel", "sequin wall": "a shimmer sequin wall panel",
+            "sequin panel": "a shimmer sequin wall panel", "panel wall": "an inflatable panel wall section",
+            "pillow wall": "an inflatable pillow wall section", "plinth": "a cylindrical display plinth",
+            "pedestal": "a display pedestal", "platform": "a low round display platform",
+            "frame": "a rectangular backdrop frame", "backdrop frame": "a rectangular backdrop frame",
+            "arch frame": "a decorative arch frame", "letter cube": "a decorative letter cube block",
+            "letter blocks": "a decorative letter cube block",
+            "inflatable number": "a giant inflatable number prop",
+            "inflatable letter": "a giant inflatable letter prop",
+        }.get(sub, f"a {sub or 'decorative'} event structure")
+        subject = f"{struct} in {color or 'white'}"
+    elif "latex" in cat or ("balloon" in cat and "foil" not in cat and "backdrop" not in cat):
         subject = f"a single inflated {size}{color} {finish} latex balloon"
     elif "backdrop" in cat:
         subject = f"a single {color} {finish} round foil balloon backdrop panel unit"
