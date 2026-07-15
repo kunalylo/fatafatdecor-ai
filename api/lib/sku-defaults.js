@@ -30,10 +30,13 @@ const SUBTYPE_COST = {
   frame:             800,
   backdrop_frame:    800,
   arch_frame:        900,
-  plinth:            400,
-  pedestal:          400,
-  platform:          500,
-  cylinder_stand:    400,
+  // Basic cylinder/plinth stands are everyday rentals — a set of three is
+  // standard even on a Rs 3,400 birthday backdrop. Keep them cheap and REAL:
+  // the decorator must still be told to bring them.
+  plinth:            250,
+  pedestal:          250,
+  platform:          300,
+  cylinder_stand:    250,
   letter_cube:       500,
   letter_blocks:     500,
   inflatable_number: 1200,

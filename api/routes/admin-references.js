@@ -562,15 +562,18 @@ async function runReferencePipeline(referenceId) {
         det.quantity = 1
       }
 
-      // A sub-Rs 8,000 design is balloons + cheap accents. It does not contain
-      // inflatable mirror balls, shimmer/panel walls or plinths — those cost more
-      // than the whole job. Drop them rather than ship impossible economics.
-      if (CHEAP && ['mirror_ball', 'structure'].includes(det.type)) {
-        const isCheapStructure = /letter_cube|letter_block/.test(detName)
-        if (!isCheapStructure) {
-          console.log(`[reference-pipeline] tier guard: dropped ${det.type}/${det.subtype || ''} from a Rs ${basePriceForTier} design`)
-          continue
-        }
+      // A sub-Rs 8,000 design cannot contain the big-ticket premium pieces — each
+      // costs more than the whole job, so seeing one is a misread (almost always
+      // chrome latex mistaken for a mirror ball, or a foil curtain for a shimmer
+      // wall). Match on what it IS, not the declared type: the model happily
+      // labels a plinth "prop" and a mirror ball "prop" too.
+      // NOTE: plinths/stands/cubes are cheap everyday rentals and stay — the
+      // decorator genuinely needs to bring them.
+      const isBigTicket = ['mirror_ball'].includes(det.type)
+        || /mirror.?ball|shimmer|sequin.?wall|panel.?wall|pillow.?wall|inflatable.?(number|letter)/.test(detName)
+      if (CHEAP && isBigTicket) {
+        console.log(`[reference-pipeline] tier guard: dropped ${det.type}/${det.subtype || ''} from a Rs ${basePriceForTier} design`)
+        continue
       }
       // Likewise a custom neon sign (~Rs 2,200) in a cheap design is really a
       // party-shop light-up letter banner.
