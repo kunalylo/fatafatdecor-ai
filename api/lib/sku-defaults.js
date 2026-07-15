@@ -41,9 +41,10 @@ const SUBTYPE_COST = {
   custom_printed_panel: 1500,  // consumable — made per event
   // Letter/number BANNER sets are quoted per letter: a "HAPPY BIRTHDAY" foil
   // banner is ~Rs 250 for the set, not 13 separate Rs 75 props.
-  letter_banner:     20,
+  letter_banner:     20,   // per letter (party-shop LED/foil banner set)
   letter_garland:    20,
   number_banner:     20,
+  light_up_letters:  30,   // per letter — marquee/battery letters, NOT custom neon
   neon_sign:         2200,
   led_strip:         600,
   neon_flex_rope:    1300,

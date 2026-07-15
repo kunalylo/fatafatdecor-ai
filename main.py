@@ -101,6 +101,10 @@ class AnalyzeRequest(BaseModel):
 class DetectItemsRequest(BaseModel):
     image_url: Optional[str] = None
     image_base64: Optional[str] = None
+    # The decoration-only price this design sells for. Without it the model
+    # cannot tell a Rs 3,400 balloon garland from a Rs 46,000 mirror-ball
+    # installation and invents premium structures in cheap designs.
+    base_price: Optional[float] = 0
 
 
 class SkuCandidate(BaseModel):
@@ -912,19 +916,24 @@ DETECT_SYSTEM_PROMPT = (
     "  These walls are OBJECTS, not background texture — never skip them.\n"
     "• BOBO/BUBBLE = clear rigid sphere, thick rim/neck collar, refracts like glass,\n"
     "  18-36\" → foil_balloon/bobo_bubble. Clear LATEX is limp, soft-edged, ≤18\".\n"
-    "• LIGHTS: continuous glowing tube bent into words → light/neon_sign (fill text).\n"
+    "• LIGHTS: a CUSTOM NEON SIGN is a thick continuous glowing tube bent into bespoke\n"
+    "  letters, mounted on a backing board (~Rs 2,200) → light/neon_sign + text.\n"
+    "  A cheap LIGHT-UP LETTER BANNER — thin battery/LED letters, marquee bulbs, or a\n"
+    "  glowing 'Happy Birthday' string sold in every party shop (~Rs 400) → light/\n"
+    "  letter_banner + text. Do not call a party-shop letter banner a custom neon.\n"
     "  The same tube run along an edge/floor/doorway with NO text → light/led_strip\n"
     "  (a SEPARATE item from any sign). Even glow with no visible source → light/\n"
     "  led_strip (say 'inferred'). Fairy lights ONLY when you can SEE discrete point\n"
     "  bulbs on a wire — never just because the scene glows.\n\n"
-    "STRUCTURE HUNT — ask 'what is holding this up?' before you finish:\n"
-    "• A cake/sign/prop above floor level → a plinth or platform under it.\n"
-    "• A cube balanced on a corner → a hidden support.\n"
-    "• A balloon column over ~5ft → a pole + weighted base.\n"
-    "• Backdrop artwork → a frame or stand behind it (frame and printed panel are TWO\n"
-    "  items). Ceiling-hung items → anchors + line.\n"
-    "Emit these as their own structure rows even when concealed, noting 'inferred'.\n"
-    "Never emit a hovering object with no support.\n\n"
+    "SUPPORTS — only when they are really there:\n"
+    "• If an object clearly stands on a visible plinth/platform/stand, list that ONE\n"
+    "  support with the quantity you can actually see.\n"
+    "• Do NOT invent supports. A garland taped to a wall, balloons on the floor, or\n"
+    "  anything whose base you cannot see needs NO structure row. Never emit several\n"
+    "  plinths because a scene 'probably' has them — one visible plinth means\n"
+    "  quantity 1, not 6.\n"
+    "• A frame around a printed backdrop is a separate item from the print, but only\n"
+    "  when the frame is visible.\n\n"
     "LETTER CUBES/BLOCKS: ONE ROW PER CUBE, quantity 1, with that cube's single glyph\n"
     "in text_content and its own placement. Read each glyph independently — never let a\n"
     "familiar word (LOVE, ONE, BABY) override the letters actually shown.\n\n"
@@ -1047,6 +1056,50 @@ REMEMBER:
    hung across the fringe curtain\", placement: \"backdrop center\"."""
 
 
+def _price_tier_note(base_price: Optional[float]) -> str:
+    """
+    Tell the model what this design SELLS for. Without it, the premium vocabulary
+    (mirror balls, shimmer walls, plinths, neon) gets applied to cheap balloon
+    jobs — a Rs 3,400 garland came back with 6 plinths and a Rs 2,200 neon sign.
+    """
+    p = int(base_price or 0)
+    if p <= 0:
+        return ""
+
+    if p < 8000:
+        tier = (
+            "SIMPLE BALLOON WORK. At this price the decor is latex balloon garlands "
+            "plus at most a cheap accent: a foil number/letter set, a light-up letter "
+            "banner, a foil fringe curtain, a small backdrop stand.\n"
+            "This design has NO inflatable mirror balls, NO shimmer/sequin walls, NO "
+            "inflatable panel walls, NO custom neon signs and NO giant inflatables — "
+            "those alone would cost more than the whole job. If you think you see one, "
+            "look again: it is far more likely a chrome LATEX balloon, a foil curtain, "
+            "or a cheap LED letter banner."
+        )
+    elif p < 20000:
+        tier = (
+            "MID-RANGE. Balloon garlands plus ONE feature element — e.g. a shimmer wall "
+            "panel OR a few mirror balls OR a neon sign OR a plinth pair. Do not stack "
+            "several premium structures into a design at this price."
+        )
+    else:
+        tier = (
+            "PREMIUM. Expect real premium structures — inflatable mirror balls, shimmer/"
+            "sequin or panel walls, plinths, frames, custom neon — alongside the balloons. "
+            "These carry most of the cost; find and list them all."
+        )
+
+    return (
+        f"PRICE CONTEXT — this decoration sells for Rs {p:,} in total (materials + setup).\n"
+        f"{tier}\n"
+        "SANITY RULE: your itemised materials must be plausible for this price. Roughly "
+        "half of the price is setup/labour/transport, so the materials you list should "
+        f"cost WELL UNDER Rs {p:,} — they must NEVER exceed it. If your list implies more "
+        "material cost than the design sells for, you have mis-identified something.\n\n"
+    )
+
+
 async def _fetch_image_bytes_for_vision(image_url: Optional[str], image_base64: Optional[str]) -> bytes:
     """Fetch + lightly compress image to JPEG bytes for gpt-4o vision."""
     if image_base64:
@@ -1096,7 +1149,7 @@ async def detect_items(req: DetectItemsRequest):
             messages=[
                 {"role": "system", "content": DETECT_SYSTEM_PROMPT},
                 {"role": "user", "content": [
-                    {"type": "text", "text": DETECT_USER_PROMPT},
+                    {"type": "text", "text": _price_tier_note(req.base_price) + DETECT_USER_PROMPT},
                     {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}},
                 ]},
             ],

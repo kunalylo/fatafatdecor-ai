@@ -498,7 +498,9 @@ async function runReferencePipeline(referenceId) {
 
   try {
     // 1. Detect items with gpt-4o vision (two passes — needs more than the default timeout)
-    const detection = await callFastAPI('/detect-items', { image_url: ref.image_url }, 240000)
+    // base_price lets the vision model calibrate: a Rs 3,400 garland has no
+    // mirror balls/shimmer walls/plinths, a Rs 46,000 install certainly does.
+    const detection = await callFastAPI('/detect-items', { image_url: ref.image_url, base_price: ref.base_price || 0 }, 240000)
     if (!detection.success) throw new Error('Vision detection failed: ' + (detection.error || detection.detail || 'unknown'))
 
     if (detection.is_screenshot || detection.is_marketing_graphic) {
@@ -676,6 +678,11 @@ async function runReferencePipeline(referenceId) {
         ai_dominant_mood:    detection.dominant_mood || '',
         setup_complexity:    detection.setup_complexity || 'medium',
         estimated_setup_minutes: detection.estimated_setup_minutes || 60,
+        // Impossible economics = a detection failure, not a real design. Surface
+        // it for the admin instead of letting a negative-margin reference ship.
+        cost_warning: basePrice > 0 && itemsCostTotal > basePrice
+          ? `Detected materials cost Rs ${Math.round(itemsCostTotal)} but this design sells for Rs ${Math.round(basePrice)} — the AI likely mis-identified an item as a premium structure. Review the costly rows.`
+          : null,
         updated_at: new Date(),
       },
       // Clear any stale failure reason from a previous errored run
