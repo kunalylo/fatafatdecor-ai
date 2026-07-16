@@ -545,6 +545,42 @@ async function runReferencePipeline(referenceId) {
     let itemsCostTotal  = 0
     let itemsPriceTotal = 0
 
+    // ── Garland size completion (deterministic) ─────────────────────────
+    // Organic garlands run CONTINUOUS graduated sizes, but the vision model
+    // buckets everything into 5/12/18 and reliably skips the 8" tier. If a
+    // colour family has 5" and 10-12" rows but no 8", the 8" balloons exist —
+    // carve them out of the neighbours (total balloon count unchanged).
+    {
+      const latex = (detection.items || []).filter(i => i.type === 'latex_balloon')
+      const byFamily = {}
+      for (const i of latex) {
+        const key = `${String(i.color || '').toLowerCase()}|${String(i.finish || '').toLowerCase()}`
+        ;(byFamily[key] = byFamily[key] || []).push(i)
+      }
+      for (const rows of Object.values(byFamily)) {
+        const sizes = new Set(rows.map(r => Number(r.size_inches)))
+        const five = rows.find(r => Number(r.size_inches) === 5)
+        const mid  = rows.find(r => [10, 12].includes(Number(r.size_inches)))
+        if (five && mid && !sizes.has(8)) {
+          const move5 = Math.floor((Number(five.quantity) || 0) * 0.35)
+          const moveM = Math.floor((Number(mid.quantity) || 0) * 0.15)
+          const qty = move5 + moveM
+          if (qty >= 5) {
+            five.quantity -= move5
+            mid.quantity  -= moveM
+            detection.items.push({
+              ...five,
+              size_inches: 8,
+              quantity: qty,
+              est_unit_cost_inr: 0,   // let the cost model price the 8" tier
+              description: `Mid-size ${five.color || ''} filler balloons in the garland (8" tier between the 5" and ${mid.size_inches}" rows)`.replace(/\s+/g, ' '),
+            })
+            console.log(`[reference-pipeline] garland completion: +${qty}x 8" ${five.color} ${five.finish}`)
+          }
+        }
+      }
+    }
+
     // ── Tier + unit guards (deterministic — prompts alone don't hold) ──
     const basePriceForTier = Number(ref.base_price) || 0
     const CHEAP = basePriceForTier > 0 && basePriceForTier < 8000
