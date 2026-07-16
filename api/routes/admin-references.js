@@ -545,11 +545,12 @@ async function runReferencePipeline(referenceId) {
     let itemsCostTotal  = 0
     let itemsPriceTotal = 0
 
-    // ── Garland size completion (deterministic) ─────────────────────────
-    // Organic garlands run CONTINUOUS graduated sizes, but the vision model
-    // buckets everything into 5/12/18 and reliably skips the 8" tier. If a
-    // colour family has 5" and 10-12" rows but no 8", the 8" balloons exist —
-    // carve them out of the neighbours (total balloon count unchanged).
+    // ── Garland filler normalisation (deterministic) ────────────────────
+    // FatafatDecor's standard garland filler is the 8" balloon — 5" is rarely
+    // stocked/used (owner's rule, 2026-07-16). The vision model can't tell 5"
+    // from 8" reliably anyway, so: a family's 5" row becomes 8" unless the
+    // model explicitly reported BOTH tiers (then it genuinely saw tiny accents
+    // and both stay).
     {
       const latex = (detection.items || []).filter(i => i.type === 'latex_balloon')
       const byFamily = {}
@@ -560,23 +561,12 @@ async function runReferencePipeline(referenceId) {
       for (const rows of Object.values(byFamily)) {
         const sizes = new Set(rows.map(r => Number(r.size_inches)))
         const five = rows.find(r => Number(r.size_inches) === 5)
-        const mid  = rows.find(r => [10, 12].includes(Number(r.size_inches)))
-        if (five && mid && !sizes.has(8)) {
-          const move5 = Math.floor((Number(five.quantity) || 0) * 0.35)
-          const moveM = Math.floor((Number(mid.quantity) || 0) * 0.15)
-          const qty = move5 + moveM
-          if (qty >= 5) {
-            five.quantity -= move5
-            mid.quantity  -= moveM
-            detection.items.push({
-              ...five,
-              size_inches: 8,
-              quantity: qty,
-              est_unit_cost_inr: 0,   // let the cost model price the 8" tier
-              description: `Mid-size ${five.color || ''} filler balloons in the garland (8" tier between the 5" and ${mid.size_inches}" rows)`.replace(/\s+/g, ' '),
-            })
-            console.log(`[reference-pipeline] garland completion: +${qty}x 8" ${five.color} ${five.finish}`)
-          }
+        if (five && !sizes.has(8)) {
+          five.size_inches = 8
+          five.est_unit_cost_inr = 0   // reprice as the 8" tier
+          five.description = String(five.description || '').replace(/5\s*("|inch)/gi, '8"')
+            || `Mid-size ${five.color || ''} filler balloons in the garland`.replace(/\s+/g, ' ')
+          console.log(`[reference-pipeline] filler normalised to 8": ${five.quantity}x ${five.color} ${five.finish}`)
         }
       }
     }
