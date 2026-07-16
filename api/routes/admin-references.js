@@ -496,7 +496,7 @@ async function findBestSkuMatch(db, detection) {
   const skuCost = Number(matchedSku.per_unit_cost) || 0
   if (estCost > 0 && skuCost > 0) {
     const ratio = Math.max(estCost / skuCost, skuCost / estCost)
-    if (ratio > 5) {
+    if (ratio > 4) {
       const created = await autoCreateSku(db, detection)
       return {
         sku: created,
@@ -552,6 +552,19 @@ async function runReferencePipeline(referenceId) {
     let matchIndex = 0
     for (const det of (detection.items || [])) {
       const detName = `${det.subtype || ''} ${det.description || ''}`.toLowerCase()
+
+      // Normalise the subtype BEFORE matching, not only in autoCreateSku — a
+      // "panel_wall" whose description says "shimmer wall panels" must match
+      // shimmer SKUs (Rs 1,200/panel), not the Rs 5,500 inflatable pillow wall.
+      // That single miss put 6x Rs 5,500 walls on a Rs 22,000 design.
+      const normalized = normalizeSubtype(det)
+      if (normalized && normalized !== det.subtype) {
+        console.log(`[reference-pipeline] subtype ${det.subtype || '(none)'} -> ${normalized} ("${String(det.description || '').slice(0, 40)}")`)
+        det.subtype = normalized
+      }
+      if (['shimmer_wall', 'panel_wall', 'plinth', 'platform'].includes(det.subtype) && det.type !== 'structure') {
+        det.type = 'structure'
+      }
 
       // A banner/garland sold as ONE set must not be multiplied by its letters:
       // the model prices the set (~Rs 400) but reports quantity = 13 letters.
