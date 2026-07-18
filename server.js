@@ -18,6 +18,7 @@ import adminReferenceRoutes  from './api/routes/admin-references.js'
 import userRoutes      from './api/routes/user.js'
 import imagekitRoutes  from './api/routes/imagekit.js'
 import seedRoutes      from './api/routes/seed.js'
+import catalogRoutes   from './api/routes/catalog.js'
 
 const app  = express()
 const PORT = process.env.PORT || 3000
@@ -75,6 +76,7 @@ app.use('/api', adminInventoryRoutes)
 app.use('/api', adminReferenceRoutes)
 app.use('/api', imagekitRoutes)
 app.use('/api', seedRoutes)
+app.use('/api', catalogRoutes)
 
 // ── 404 fallback ──────────────────────────────────────────────────
 app.use((_req, res) => {

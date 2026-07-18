@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { asyncRoute } from '../helpers.js'
+import { requireAdmin } from '../jwt.js'
 import { IMAGEKIT_URL, IMAGEKIT_PRIVATE_KEY, getImageKitFolder } from '../config.js'
 
 const router = Router()
@@ -12,8 +13,8 @@ router.get('/imagekit/reference', asyncRoute(async (req, res, ok) => {
   return ok({ folder, base_url: IMAGEKIT_URL, folder_url: `${IMAGEKIT_URL}/${folder}`, budget_min, budget_max })
 }))
 
-// POST /imagekit/upload
-router.post('/imagekit/upload', asyncRoute(async (req, res, ok, err) => {
+// POST /imagekit/upload — admin only (was unauthenticated; only AdminGifts uses it)
+router.post('/imagekit/upload', requireAdmin, asyncRoute(async (req, res, ok, err) => {
   const { file_base64, file_name, folder } = req.body
   if (!file_base64 || !file_name) return err('file_base64 and file_name required')
   if (!IMAGEKIT_PRIVATE_KEY) return err('IMAGEKIT_PRIVATE_KEY not configured', 500)
