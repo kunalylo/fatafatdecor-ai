@@ -52,8 +52,33 @@ async function ensureSeed(db, name) {
   }
 }
 
+// One-time self-heal: docs seeded before an image-URL fix keep the dead URL in
+// Mongo (lazy-seed never re-runs). Rewrite known-dead URLs to their working
+// replacements once per process boot — idempotent, no admin token needed.
+const DEAD_IMAGE_FIXES = [
+  {
+    dead: 'https://images.unsplash.com/photo-1605302700048-d3a78c0b7e90?w=600&q=85',
+    fixes: {
+      bulk_occasions:    'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/04_festival_hampers/festival_hampers_diwali_roshni_collection_XoDXGLNtk.jpg',
+      bulk_hampers:      'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/04_festival_hampers/hero_and_product_image/diwali/golden_diya_and_sweets_WX9Hd_6Cp.jpg',
+      corporate_hampers: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/04_festival_hampers/hero_and_product_image/diwali/heritage_mithai_hamper_qZGGOXL0w.jpg',
+    },
+  },
+]
+let imageFixesApplied = false
+async function applyImageFixes(db) {
+  if (imageFixesApplied) return
+  imageFixesApplied = true
+  for (const { dead, fixes } of DEAD_IMAGE_FIXES) {
+    for (const [coll, url] of Object.entries(fixes)) {
+      await db.collection(coll).updateMany({ image: dead }, { $set: { image: url } }).catch(() => {})
+    }
+  }
+}
+
 async function getAll(db, name, { activeOnly = true } = {}) {
   await ensureSeed(db, name)
+  await applyImageFixes(db)
   const q = activeOnly ? { $or: [{ active: true }, { active: { $exists: false } }] } : {}
   const docs = await db.collection(name).find(q).sort({ sortOrder: 1 }).toArray()
   return docs.map(({ _id, ...d }) => d)

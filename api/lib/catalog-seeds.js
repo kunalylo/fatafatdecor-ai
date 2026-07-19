@@ -199,7 +199,7 @@ export const SEED_BULK_OCCASIONS = [
   { id: 'baby-shower', name: 'Baby Shower Bulk Gifts', icon: 'Baby', desc: 'Pastel · soft · adorable', image: 'https://images.unsplash.com/photo-1515488042361-ee00e0ddd4e4?w=600&q=85', accent: 'accent-lavender', sortOrder: 1, active: true },
   { id: 'corporate', name: 'Corporate Hampers', icon: 'Briefcase', desc: 'GST + branded boxes', image: 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?w=600&q=85', accent: 'accent-mint', sortOrder: 2, active: true },
   { id: 'school', name: 'School / Kids Gifts', icon: 'GraduationCap', desc: 'Goodie bags + class hampers', image: 'https://images.unsplash.com/photo-1481391319762-47dff72954d9?w=600&q=85', accent: 'accent-pink', sortOrder: 3, active: true },
-  { id: 'festival', name: 'Festival Hampers', icon: 'Flame', desc: 'Diwali · Holi · Rakhi · Eid', image: 'https://images.unsplash.com/photo-1605302700048-d3a78c0b7e90?w=600&q=85', accent: 'accent-peach', sortOrder: 4, active: true },
+  { id: 'festival', name: 'Festival Hampers', icon: 'Flame', desc: 'Diwali · Holi · Rakhi · Eid', image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/04_festival_hampers/festival_hampers_diwali_roshni_collection_XoDXGLNtk.jpg', accent: 'accent-peach', sortOrder: 4, active: true },
 ];
 
 export const SEED_BULK_THEMES = [
@@ -220,7 +220,7 @@ export const SEED_BULK_TIERS = [
 
 export const SEED_BULK_HAMPERS = [
   { id: 'b1', name: 'Wellness Curated Box', perUnit: 999, image: 'https://images.unsplash.com/photo-1599490659213-e2b9527bd087?w=600&q=85', category: 'Wellness', contents: ['Organic tea', 'Dark chocolate', 'Scented candle', 'Journal'], sortOrder: 0, active: true },
-  { id: 'b2', name: 'Festive Gold Hamper', perUnit: 1499, image: 'https://images.unsplash.com/photo-1605302700048-d3a78c0b7e90?w=600&q=85', category: 'Festive', contents: ['Dry fruits', 'Mithai box', 'Diya set', 'Greeting card'], sortOrder: 1, active: true },
+  { id: 'b2', name: 'Festive Gold Hamper', perUnit: 1499, image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/04_festival_hampers/hero_and_product_image/diwali/golden_diya_and_sweets_WX9Hd_6Cp.jpg', category: 'Festive', contents: ['Dry fruits', 'Mithai box', 'Diya set', 'Greeting card'], sortOrder: 1, active: true },
   { id: 'b3', name: 'Gourmet Snack Trove', perUnit: 849, image: 'https://images.unsplash.com/photo-1571167530149-c1105da4c2c7?w=600&q=85', category: 'Edible', contents: ['Artisan snacks', 'Cold brew', 'Macarons', 'Note'], sortOrder: 2, active: true },
   { id: 'b4', name: 'Eco Plantable Box', perUnit: 699, image: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=600&q=85', category: 'Sustainable', contents: ['Plantable pen', 'Seed paper card', 'Bamboo bottle', 'Cotton tote'], sortOrder: 3, active: true },
 ];
@@ -237,7 +237,7 @@ export const SEED_CORPORATE_PACKAGES = [
 
 export const SEED_CORPORATE_HAMPERS = [
   { id: 'c1', name: 'Onboarding Welcome Kit', perUnit: 1299, image: 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?w=600&q=85', use: 'New hires', contents: ['Branded notebook', 'Premium pen', 'Bottle', 'Welcome card'], sortOrder: 0, active: true },
-  { id: 'c2', name: 'Client Diwali Hamper', perUnit: 2499, image: 'https://images.unsplash.com/photo-1605302700048-d3a78c0b7e90?w=600&q=85', use: 'Top accounts', contents: ['Premium dry fruits', 'Gilded diya', 'Personalised letter', 'Silk pouch'], sortOrder: 1, active: true },
+  { id: 'c2', name: 'Client Diwali Hamper', perUnit: 2499, image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/04_festival_hampers/hero_and_product_image/diwali/heritage_mithai_hamper_qZGGOXL0w.jpg', use: 'Top accounts', contents: ['Premium dry fruits', 'Gilded diya', 'Personalised letter', 'Silk pouch'], sortOrder: 1, active: true },
   { id: 'c3', name: 'Team Appreciation Box', perUnit: 999, image: 'https://images.unsplash.com/photo-1513885535751-8b9238bd345a?w=600&q=85', use: 'Quarterly awards', contents: ['Custom trophy', 'Chocolates', 'Co-branded tote', 'Thank-you card'], sortOrder: 2, active: true },
   { id: 'c4', name: 'Investor Premium Hamper', perUnit: 4999, image: 'https://customer-assets.emergentagent.com/job_premium-decor-design-2/artifacts/kuxwbqy4_IMG_2309.JPG', use: 'Board & investors', contents: ['Single malt', 'Crystal glassware', 'Cigar set', 'Leather journal'], sortOrder: 3, active: true },
 ];
