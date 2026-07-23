@@ -159,23 +159,26 @@ router.post('/dp/detect-city', requireDp, asyncRoute(async (req, res, ok, err) =
   if ((lat == null || lng == null) && !address && !city) {
     return err('Could not read your location. Turn on GPS/location and try again.', 400)
   }
-  let resolved = await matchAllowedCityInText(db, address)   // prefer an allowed city found in the geocode text
-  let served = !!resolved
-  if (!resolved && city) {                                    // fall back to the raw detected city name
-    const norm = normalizeCityName(String(city).trim())
-    if (await isCityAllowed(db, norm)) { resolved = norm; served = true }
-  }
-  // The human-readable place we detected, even if we don't serve it — so the app can say
-  // "You're in <place> — not a service area yet" instead of showing nothing.
-  const detected = resolved
-    || (city && String(city).trim())
+  // The raw place the phone/browser reported (e.g. "Mulshi", "Ranchi").
+  const rawCity = (city && String(city).trim())
     || (address ? String(address).split(',')[0].trim() : '')
-    || null
+    || ''
+  // If the detected area is a city we actually serve, store its CANONICAL name so it matches
+  // orders exactly. Otherwise store the raw place as-is.
+  let servedName = await matchAllowedCityInText(db, address)
+  if (!servedName && rawCity && await isCityAllowed(db, normalizeCityName(rawCity))) {
+    servedName = normalizeCityName(rawCity)
+  }
+  // ALWAYS set the decorator's city to where they actually are — the button must reflect their
+  // real location, not stay pinned to a served city. Order-matching then naturally filters: a
+  // decorator outside a service area simply matches no orders until they move into one.
+  const resolved = servedName || rawCity || null
+  const served = !!servedName
   const set = { city_updated_at: new Date(), city_auto: true }
-  if (resolved) set.city = resolved                          // only ever store a city we actually serve
+  if (resolved) set.city = resolved
   if (lat != null && lng != null) set.current_location = { lat, lng, updated_at: new Date() }
   await db.collection('delivery_persons').updateOne({ id: req.dpId }, { $set: set })
-  return ok({ success: true, city: resolved || null, served, detected })
+  return ok({ success: true, city: resolved, served, detected: resolved })
 }))
 
 // GET /dp/dashboard/:id
