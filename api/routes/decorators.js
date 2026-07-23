@@ -155,17 +155,27 @@ router.post('/dp/update-city', requireDp, asyncRoute(async (req, res, ok, err) =
 router.post('/dp/detect-city', requireDp, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
   const { lat, lng, address, city } = req.body || {}
+  // Nothing to work with → tell the client so it can show a real message instead of failing silently.
+  if ((lat == null || lng == null) && !address && !city) {
+    return err('Could not read your location. Turn on GPS/location and try again.', 400)
+  }
   let resolved = await matchAllowedCityInText(db, address)   // prefer an allowed city found in the geocode text
   let served = !!resolved
   if (!resolved && city) {                                    // fall back to the raw detected city name
-    resolved = normalizeCityName(String(city).trim())
-    served = await isCityAllowed(db, resolved)
+    const norm = normalizeCityName(String(city).trim())
+    if (await isCityAllowed(db, norm)) { resolved = norm; served = true }
   }
+  // The human-readable place we detected, even if we don't serve it — so the app can say
+  // "You're in <place> — not a service area yet" instead of showing nothing.
+  const detected = resolved
+    || (city && String(city).trim())
+    || (address ? String(address).split(',')[0].trim() : '')
+    || null
   const set = { city_updated_at: new Date(), city_auto: true }
-  if (resolved) set.city = resolved
+  if (resolved) set.city = resolved                          // only ever store a city we actually serve
   if (lat != null && lng != null) set.current_location = { lat, lng, updated_at: new Date() }
   await db.collection('delivery_persons').updateOne({ id: req.dpId }, { $set: set })
-  return ok({ success: true, city: resolved || null, served })
+  return ok({ success: true, city: resolved || null, served, detected })
 }))
 
 // GET /dp/dashboard/:id
