@@ -299,9 +299,9 @@ export const SEED_OFFERS = [
 // (admin-editable images/titles). accent = accent-peach|pink|lavender|mint.
 // ---------------------------------------------------------------------------
 export const SEED_TRENDING = [
-  { id: 'trend-birthday',     title: 'Elegant Birthday Celebration', category: 'Birthday Decor',    occasion: 'birthday',    booked: 3, accent: 'accent-peach',    image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/03_trending_decorations/elegant_birthday_celebration_R-y1Ekkd9.jpg', active: true, sortOrder: 0 },
-  { id: 'trend-anniversary',  title: 'Romantic Anniversary Setup',   category: 'Anniversary Decor', occasion: 'anniversary', booked: 2, accent: 'accent-pink',     image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/03_trending_decorations/romantic_anniversary_setup_40m64zJpb.jpg', active: true, sortOrder: 1 },
-  { id: 'trend-babyshower',   title: 'Baby Shower Celebration',      category: 'Baby Shower Decor', occasion: 'baby_shower', booked: 5, accent: 'accent-lavender', image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/03_trending_decorations/baby_shower_celebration_lkRvRboGZ.jpg', active: true, sortOrder: 2 },
+  { id: 'trend-birthday',     title: 'Elegant Birthday Celebration', category: 'Birthday Decor',    location: 'Ranchi, Jharkhand', occasion: 'birthday',    booked: 3, accent: 'accent-peach',    image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/03_trending_decorations/elegant_birthday_celebration_R-y1Ekkd9.jpg', active: true, sortOrder: 0 },
+  { id: 'trend-anniversary',  title: 'Romantic Anniversary Setup',   category: 'Anniversary Decor', location: 'Ranchi, Jharkhand', occasion: 'anniversary', booked: 2, accent: 'accent-pink',     image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/03_trending_decorations/romantic_anniversary_setup_40m64zJpb.jpg', active: true, sortOrder: 1 },
+  { id: 'trend-babyshower',   title: 'Baby Shower Celebration',      category: 'Baby Shower Decor', location: 'Ranchi, Jharkhand', occasion: 'baby_shower', booked: 5, accent: 'accent-lavender', image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/03_trending_decorations/baby_shower_celebration_lkRvRboGZ.jpg', active: true, sortOrder: 2 },
 ];
 
 // ---------------------------------------------------------------------------
