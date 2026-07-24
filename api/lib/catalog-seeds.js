@@ -305,6 +305,18 @@ export const SEED_TRENDING = [
 ];
 
 // ---------------------------------------------------------------------------
+// TRENDING HAMPERS — the "Trending hampers" carousel on Home. Fully admin-
+// curated (image/title/eyebrow/tagline/from-price/order). festivalId (optional)
+// makes a card open that festival page on tap; empty → opens Gifts.
+// ---------------------------------------------------------------------------
+export const SEED_TRENDING_HAMPERS = [
+  { id: 'th-rakhi',     festivalId: 'rakhi',     title: 'Rakhi',     eyebrow: 'Bandhan Collection', tagline: 'For your sibling',   priceFrom: 899,  color: '#B89AFF', image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/04_festival_hampers/hero_and_product_image/rakhi/hero_rakhi_dM565YyG_.jpg',        active: true, sortOrder: 0 },
+  { id: 'th-diwali',    festivalId: 'diwali',    title: 'Diwali',    eyebrow: 'Roshni Collection',  tagline: 'Festival of lights', priceFrom: 1599, color: '#FFB088', image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/04_festival_hampers/hero_and_product_image/diwali/hero_diwali_LOw-MlbUm.jpg',      active: true, sortOrder: 1 },
+  { id: 'th-christmas', festivalId: 'christmas', title: 'Christmas', eyebrow: 'Noel Collection',    tagline: 'Merry & bright',     priceFrom: 999,  color: '#88E0AA', image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/04_festival_hampers/hero_and_product_image/christmas/christmas_hero_kv6q4jSnn.jpg', active: true, sortOrder: 2 },
+  { id: 'th-holi',      festivalId: 'holi',      title: 'Holi',      eyebrow: 'Rang Collection',    tagline: 'Colours of joy',     priceFrom: 999,  color: '#FF8AB0', image: 'https://ik.imagekit.io/jcp2urr7b/content/02_home_page/04_festival_hampers/hero_and_product_image/holi/hero_holi_cnQbFlpl-.jpg',        active: true, sortOrder: 3 },
+];
+
+// ---------------------------------------------------------------------------
 // LEAD STATUSES — workflow for gift/bulk/corporate/private enquiries
 // ---------------------------------------------------------------------------
 export const SEED_LEAD_STATUSES = [

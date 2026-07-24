@@ -20,7 +20,7 @@ import {
   SEED_BULK_OCCASIONS, SEED_BULK_THEMES, SEED_BULK_TIERS, SEED_BULK_HAMPERS,
   SEED_CORPORATE_PACKAGES, SEED_CORPORATE_HAMPERS, SEED_CORPORATE_ADDONS,
   SEED_PRIVATE_TYPES, SEED_VELVET_ITEMS, SEED_VELVET_PERKS, SEED_VELVET_CODES,
-  SEED_OFFERS, SEED_LEAD_STATUSES, SEED_TRENDING,
+  SEED_OFFERS, SEED_LEAD_STATUSES, SEED_TRENDING, SEED_TRENDING_HAMPERS,
 } from '../lib/catalog-seeds.js'
 
 const router = Router()
@@ -42,6 +42,7 @@ const SEEDS = {
   velvet_codes:       SEED_VELVET_CODES,
   offers:             SEED_OFFERS,
   trending:           SEED_TRENDING,
+  trending_hampers:   SEED_TRENDING_HAMPERS,
 }
 
 async function ensureSeed(db, name) {
@@ -117,6 +118,11 @@ router.get('/festivals/:id', asyncRoute(async (req, res, ok, err) => {
 router.get('/trending', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   return ok(await getAll(db, 'trending'), 300)
+}))
+
+router.get('/trending-hampers', asyncRoute(async (req, res, ok) => {
+  const db = await connectToMongo()
+  return ok(await getAll(db, 'trending_hampers'), 300)
 }))
 
 router.get('/gift-categories', asyncRoute(async (req, res, ok) => {
