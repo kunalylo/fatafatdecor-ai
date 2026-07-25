@@ -285,7 +285,11 @@ router.put('/admin/catalog/:collection', requireAdmin, asyncRoute(async (req, re
   await ensureSeed(db, name)
   const key = name === 'offers' || name === 'velvet_codes' ? 'code' : 'id'
   const keyVal = doc[key] || id
-  const { _id, ...fields } = doc
+  // Strip immutable/server-owned fields from the incoming doc. Editors send the whole card
+  // back (including created_at) — $set-ing created_at while $setOnInsert also sets it makes
+  // Mongo reject the update ("would create a conflict at 'created_at'"), which broke every
+  // edit of an existing card.
+  const { _id, created_at, updated_at, ...fields } = doc
   await db.collection(name).updateOne(
     { [key]: keyVal },
     { $set: { ...fields, [key]: keyVal, updated_at: new Date() }, $setOnInsert: { created_at: new Date() } },
