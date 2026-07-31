@@ -100,8 +100,8 @@ function daysToGo(month, day) {
 router.get('/festivals', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   const festivals = (await getAll(db, 'festivals')).map(f => ({ ...f, days: daysToGo(f.month, f.day) }))
-  // Featured first (home carousel order), then soonest
-  festivals.sort((a, b) => (Number(b.featured) - Number(a.featured)) || (a.days - b.days))
+  // Featured first (home carousel), then by the admin's Sort order (drag arrows in admin)
+  festivals.sort((a, b) => (Number(b.featured) - Number(a.featured)) || ((a.sortOrder ?? 0) - (b.sortOrder ?? 0)))
   return ok(festivals, 300)
 }))
 
