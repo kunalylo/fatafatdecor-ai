@@ -130,6 +130,64 @@ router.post('/dp/change-password', requireDp, asyncRoute(async (req, res, ok, er
   return ok({ success: true, message: 'Password updated successfully' })
 }))
 
+// POST /dp/delete-account — decorator permanently deletes their own account.
+// Required by App Store Guideline 5.1.1(v): an app that supports accounts must let the
+// user delete theirs from inside the app, with no customer-service step.
+//
+// Deleting a WORKER account has side effects a customer account doesn't, so we:
+//   1) release every job they hold, back to 'pending' with a clean slate (OTP/selfie
+//      cleared) so another decorator can pick it up — no customer is left stranded;
+//   2) KEEP dp_collections / dp_deposits rows (money that moved must stay auditable —
+//      they carry a UUID, not personal data) and just flag them as belonging to a
+//      deleted account;
+//   3) hard-delete the delivery_persons doc, so the login and all personal data
+//      (name, phone, password, push tokens, GPS) are gone for good.
+router.post('/dp/delete-account', requireDp, asyncRoute(async (req, res, ok, err) => {
+  const db = await connectToMongo()
+  const dpId = req.dpId
+  const { password } = req.body || {}
+  const dp = await db.collection('delivery_persons').findOne({ id: dpId })
+  if (!dp) return err('Decorator not found', 404)
+  // Confirm it's really them (accounts always have a password; default is set at creation).
+  if (dp.password && (!password || dp.password !== hashPwd(password))) {
+    return err('Password is incorrect', 401)
+  }
+
+  const LIVE = ['pending', 'assigned', 'en_route', 'arrived', 'decorating']
+  const releaseFrom = async (collection) => {
+    const mine = {
+      $or: [{ assigned_decorators: dpId }, { accepted_decorators: dpId }, { delivery_person_id: dpId }],
+    }
+    // Hand any in-flight job back to the pool, cleared of this decorator's progress.
+    await db.collection(collection).updateMany(
+      { ...mine, delivery_status: { $in: LIVE } },
+      {
+        $set: { delivery_status: 'pending', delivery_person_id: null, released_at: new Date(), released_reason: 'decorator_account_deleted' },
+        $unset: { verification_otp: '', otp_generated_at: '', selfie_proof: '', face_scan: '', arrived_at: '' },
+      },
+    )
+    // Remove them from every order they touched (including delivered ones).
+    await db.collection(collection).updateMany(
+      mine,
+      { $pull: { assigned_decorators: dpId, accepted_decorators: dpId } },
+    )
+    await db.collection(collection).updateMany(
+      { delivery_person_id: dpId },
+      { $set: { delivery_person_id: null } },
+    )
+  }
+  await releaseFrom('orders')
+  await releaseFrom('gift_orders')
+
+  // Money records stay for audit, minus the person's name.
+  const stamp = { dp_deleted: true, dp_deleted_at: new Date() }
+  await db.collection('dp_collections').updateMany({ dp_id: dpId }, { $set: stamp, $unset: { dp_name: '' } })
+  await db.collection('dp_deposits').updateMany({ dp_id: dpId }, { $set: stamp, $unset: { dp_name: '' } })
+
+  await db.collection('delivery_persons').deleteOne({ id: dpId })
+  return ok({ success: true, message: 'Your account and personal data have been permanently deleted.' })
+}))
+
 // POST /dp/update-city — decorator sets the city they currently work in.
 // They only receive orders/notifications from this city. Must be a city we serve.
 router.post('/dp/update-city', requireDp, asyncRoute(async (req, res, ok, err) => {
