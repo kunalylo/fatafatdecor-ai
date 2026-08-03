@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
-import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute, isCityAllowed, normalizeCityName, matchAllowedCityInText, decoratorCommitments, scheduleConflictAgainst, scheduleClashMessage, conflictDescriptor } from '../helpers.js'
+import { hashPwd, sendWhatsApp, sendOtpSms, sendVerificationOtpEmail, asyncRoute, isCityAllowed, normalizeCityName, matchAllowedCityInText, decoratorCommitments, scheduleConflictAgainst, scheduleClashMessage, conflictDescriptor, sameCity, resolveOrderCity } from '../helpers.js'
 import { signToken, requireDp, requireAdmin } from '../jwt.js'
 import { VAPID_PUBLIC_KEY, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } from '../config.js'
 import Razorpay from 'razorpay'
@@ -256,11 +256,33 @@ router.get('/dp/dashboard/:id', requireDp, asyncRoute(async (req, res, ok, err) 
     db.collection('gift_orders').find({ $or: [{ accepted_decorators: dpId }, { delivery_person_id: dpId }], delivery_status: { $in: ['assigned','en_route','arrived'] } }).sort({ created_at: -1 }).toArray(),
   ])
   const { _id, password: _, ...safeDp } = dp
+
+  // A decorator may only be OFFERED work in the city they are currently in. Assignment is already
+  // city-filtered at payment time, but a decorator can move (or change their city) afterwards —
+  // so re-check here, live, on every dashboard load. Otherwise someone who set their city to
+  // another town would keep seeing the previous city's requests.
+  // Only NEW requests are filtered: jobs they already accepted stay visible so they can finish them.
+  const cityOf = new Map()
+  const inMyCity = async (o) => {
+    if (!safeDp.city) return true                    // city not set yet — app prompts for it; don't blank the list
+    if (!cityOf.has(o.id)) cityOf.set(o.id, await resolveOrderCity(db, o))
+    const oc = cityOf.get(o.id)
+    return !oc || sameCity(oc, safeDp.city)          // unknown order city → can't exclude it
+  }
+  const filterByCity = async (list) => {
+    const keep = await Promise.all(list.map(inMyCity))
+    return list.filter((_, i) => keep[i])
+  }
+  const [pendingInCity, pendingGiftsInCity] = await Promise.all([
+    filterByCity(pendingOrders),
+    filterByCity(pendingGiftOrders),
+  ])
+
   // Flag pending orders that clash with what this decorator has already accepted, so the app can
   // disable Accept and explain why (double-booking: each job needs a 30m+2h+30m clear block).
   const commitments = await decoratorCommitments(db, dpId)
   const withConflict = (o, kind) => ({ ...o, schedule_conflict: conflictDescriptor(scheduleConflictAgainst(commitments, o.delivery_slot, kind, o.id)) })
-  return ok({ delivery_person: safeDp, today_orders: todayOrders.map(dpListOrder), active_orders: allActiveOrders.map(dpListOrder), pending_orders: pendingOrders.map(o => withConflict(dpListOrder(o), 'decoration')), pending_gift_orders: pendingGiftOrders.map(o => withConflict(dpListOrder(o), 'gift')), active_gift_orders: activeGiftOrders.map(dpListOrder), date: today })
+  return ok({ delivery_person: safeDp, today_orders: todayOrders.map(dpListOrder), active_orders: allActiveOrders.map(dpListOrder), pending_orders: pendingInCity.map(o => withConflict(dpListOrder(o), 'decoration')), pending_gift_orders: pendingGiftsInCity.map(o => withConflict(dpListOrder(o), 'gift')), active_gift_orders: activeGiftOrders.map(dpListOrder), date: today })
 }))
 
 // GET /dp/calendar/:id
@@ -714,6 +736,14 @@ router.post('/dp/accept-order', requireDp, asyncRoute(async (req, res, ok, err) 
   const order = await db.collection('orders').findOne({ id: order_id })
   if (!order) return err('Order not found', 404)
   if (!(order.assigned_decorators || []).includes(dpId)) return err('Order not assigned to you', 403)
+  // A decorator can only take work in the city they are currently in (a stale app screen could
+  // otherwise still POST an out-of-city order id).
+  if (dp.city) {
+    const orderCity = await resolveOrderCity(db, order)
+    if (orderCity && !sameCity(orderCity, dp.city)) {
+      return err(`This order is in ${orderCity}. You can only accept orders in ${dp.city}.`, 403)
+    }
+  }
   if ((order.accepted_decorators || []).includes(dpId)) return err('You have already accepted this order')
   if ((order.accepted_decorators || []).length >= 2) return err('This order already has 2 decorators assigned', 409)
   // Double-booking guard: this job's 3-hour block (30 min travel + 2 h decorate + 30 min return)

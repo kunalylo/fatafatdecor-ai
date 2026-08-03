@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { connectToMongo } from '../db.js'
 import { requireUser, requireDp } from '../jwt.js'
-import { asyncRoute, sendOtpSms, sendVerificationOtpEmail, decoratorCommitments, scheduleConflictAgainst, scheduleClashMessage } from '../helpers.js'
+import { asyncRoute, sendOtpSms, sendVerificationOtpEmail, decoratorCommitments, scheduleConflictAgainst, scheduleClashMessage, sameCity, resolveOrderCity } from '../helpers.js'
 
 const router = Router()
 
@@ -125,6 +125,13 @@ router.post('/dp/accept-gift-order', requireDp, asyncRoute(async (req, res, ok, 
   if (!giftOrder) return err('Gift order not found', 404)
   if (!(giftOrder.assigned_decorators || []).includes(dpId)) return err('Gift order not assigned to you', 403)
   if ((giftOrder.accepted_decorators || []).includes(dpId)) return err('You have already accepted this gift order')
+  // Deliveries are only offered in the city the decorator is currently in (guards a stale screen).
+  if (dp.city) {
+    const giftCity = await resolveOrderCity(db, giftOrder)
+    if (giftCity && !sameCity(giftCity, dp.city)) {
+      return err(`This delivery is in ${giftCity}. You can only accept deliveries in ${dp.city}.`, 403)
+    }
+  }
   // Double-booking guard — this gift delivery must not overlap a job already accepted.
   const commitments = await decoratorCommitments(db, dpId)
   const clash = scheduleConflictAgainst(commitments, giftOrder.delivery_slot, 'gift', order_id)
