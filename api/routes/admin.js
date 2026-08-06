@@ -126,11 +126,27 @@ router.post('/admin/dp-toggle', asyncRoute(async (req, res, ok, err) => {
 
 // ── Admin Orders ───────────────────────────────────────────────
 
-// GET /admin/orders — all orders
+// Orders store only `user_id`, so every admin list rendered addresses with no idea WHO placed
+// the order. Resolve the customer in one $in lookup (not per-order) and attach name/phone/email.
+async function withCustomer(db, orders) {
+  const ids = [...new Set(orders.map(o => o.user_id).filter(Boolean))]
+  if (!ids.length) return orders.map(({ _id, ...o }) => o)
+  const users = await db.collection('users')
+    .find({ id: { $in: ids } })
+    .project({ _id: 0, id: 1, name: 1, phone: 1, email: 1 })
+    .toArray()
+  const byId = Object.fromEntries(users.map(u => [u.id, u]))
+  return orders.map(({ _id, ...o }) => {
+    const u = byId[o.user_id]
+    return u ? { ...o, user_name: u.name || '', user_phone: u.phone || '', user_email: u.email || '' } : o
+  })
+}
+
+// GET /admin/orders — all orders, with the customer resolved
 router.get('/admin/orders', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   const orders = await db.collection('orders').find({}).sort({ created_at: -1 }).toArray()
-  return ok(orders.map(({ _id, ...o }) => o))
+  return ok(await withCustomer(db, orders))
 }))
 
 // PUT /admin/orders/:id  (admin full update)
@@ -322,11 +338,11 @@ router.delete('/admin/gifts/:id', asyncRoute(async (req, res, ok) => {
   return ok({ success: true })
 }))
 
-// GET /admin/gift-orders — all gift orders
+// GET /admin/gift-orders — all gift orders, with the customer resolved
 router.get('/admin/gift-orders', asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   const orders = await db.collection('gift_orders').find({}).sort({ created_at: -1 }).toArray()
-  return ok(orders.map(({ _id, ...o }) => o))
+  return ok(await withCustomer(db, orders))
 }))
 
 // PUT /admin/gift-orders/:id — update gift order status
