@@ -2,18 +2,20 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { connectToMongo } from '../db.js'
 import { isCityAllowed, asyncRoute } from '../helpers.js'
+import { requireAdmin } from '../jwt.js'
 
 const router = Router()
 
-// GET /cities
+// GET /cities — public: the customer and decorator apps read the serviceable-city list.
 router.get('/cities', asyncRoute(async (req, res, ok) => {
   const db     = await connectToMongo()
   const cities = await db.collection('allowed_cities').find({}).sort({ name: 1 }).toArray()
   return ok(cities.map(({ _id, ...c }) => c))
 }))
 
-// POST /cities
-router.post('/cities', asyncRoute(async (req, res, ok, err) => {
+// POST /cities — admin only (writes below are reached exclusively from the admin panel;
+// unauthenticated, anyone could open or close a service city).
+router.post('/cities', requireAdmin, asyncRoute(async (req, res, ok, err) => {
   const db = await connectToMongo()
   const { name, state } = req.body
   if (!name) return err('City name required')
@@ -25,8 +27,8 @@ router.post('/cities', asyncRoute(async (req, res, ok, err) => {
   return ok(clean)
 }))
 
-// PUT /cities/:id
-router.put('/cities/:id', asyncRoute(async (req, res, ok, err) => {
+// PUT /cities/:id — admin only
+router.put('/cities/:id', requireAdmin, asyncRoute(async (req, res, ok, err) => {
   const db   = await connectToMongo()
   const body = req.body; delete body._id
   await db.collection('allowed_cities').updateOne({ id: req.params.id }, { $set: body })
@@ -36,8 +38,8 @@ router.put('/cities/:id', asyncRoute(async (req, res, ok, err) => {
   return ok(clean)
 }))
 
-// DELETE /cities/:id
-router.delete('/cities/:id', asyncRoute(async (req, res, ok) => {
+// DELETE /cities/:id — admin only
+router.delete('/cities/:id', requireAdmin, asyncRoute(async (req, res, ok) => {
   const db = await connectToMongo()
   await db.collection('allowed_cities').deleteOne({ id: req.params.id })
   return ok({ success: true })
