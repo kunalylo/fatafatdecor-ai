@@ -19,6 +19,7 @@ import userRoutes      from './api/routes/user.js'
 import imagekitRoutes  from './api/routes/imagekit.js'
 import seedRoutes      from './api/routes/seed.js'
 import catalogRoutes   from './api/routes/catalog.js'
+import cityPricingRoutes from './api/routes/city-pricing.js'
 
 const app  = express()
 const PORT = process.env.PORT || 3000
@@ -77,6 +78,7 @@ app.use('/api', adminReferenceRoutes)
 app.use('/api', imagekitRoutes)
 app.use('/api', seedRoutes)
 app.use('/api', catalogRoutes)
+app.use('/api', cityPricingRoutes)
 
 // ── 404 fallback ──────────────────────────────────────────────────
 app.use((_req, res) => {
